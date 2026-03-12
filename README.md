@@ -1,35 +1,53 @@
-# WordPress Plugin Dev — Coder Workspace Template
+# WordPress Multi-Plugin Dev — Coder Workspace Template
 
-A batteries-included [Coder](https://coder.com) workspace template for WordPress plugin development with **Claude Code** AI assistance.
+A batteries-included [Coder](https://coder.com) workspace template for WordPress multi-plugin development with **Claude Code** AI assistance.
 
 ---
 
-## 🏗️ What's Included
+## What's Included
 
-| Service | URL | Purpose |
+| Service | Access | Purpose |
 |---|---|---|
-| WordPress | `http://localhost:8080` | Live dev site |
-| WP Admin | `http://localhost:8080/wp-admin` | Dashboard (admin / admin) |
-| VS Code | `http://localhost:8081` | Browser IDE |
-| phpMyAdmin | `http://localhost:8082` | Database GUI |
+| WordPress | Coder dashboard button | Live dev site (admin / admin) |
+| VS Code | Coder dashboard button | Browser IDE (code-server) |
+| phpMyAdmin | Coder dashboard button | Database GUI |
+| Claude Code | Terminal: `claude` | AI pair-programmer |
 
 ### Tools pre-installed
 - **PHP** (8.1 / 8.2 / 8.3 — your choice)
-- **WP-CLI** — full WordPress management from the terminal
+- **WP-CLI** — WordPress management from the terminal (runs via Docker exec into WP container)
 - **Composer** — PHP dependency management + PSR-4 autoloading
 - **@wordpress/scripts** — official WP JS/CSS build toolchain
 - **PHPUnit + WP_Mock** — unit testing
 - **PHP_CodeSniffer + WPCS** — WordPress coding standards linting
-- **Claude Code CLI** — AI pair-programmer in your terminal
+- **Claude Code** — installed via [official Coder module](https://registry.coder.com/modules/claude-code) with OAuth support
 - **code-server** — VS Code in the browser with PHP + WP extensions
 
 ---
 
-## 🚀 Deploy to Coder
+## Architecture
+
+```
+                    Coder Server (:3000)
+                         |
+                    Coder Agent (dev container)
+                    /    |    \
+    code-server:8081  socat:8080  phpMyAdmin:8082
+                         |
+                   WordPress:80 (Apache)
+                         |
+                    MySQL:3306
+```
+
+All services run in Docker containers on a shared network. The dev container communicates with WordPress via a `socat` IPv4 proxy to avoid Docker's IPv6 DNS issues.
+
+---
+
+## Deploy to Coder
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/your-org/coder-wp-plugin-template
+git clone https://github.com/mrabbani/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # 2. Push the template to your Coder instance
@@ -39,10 +57,7 @@ coder templates push wordpress-plugin \
 
 # 3. Create a workspace
 coder create my-plugin \
-  --template wordpress-plugin \
-  -p plugin_slug=my-awesome-plugin \
-  -p plugin_name="My Awesome Plugin" \
-  -p php_version=8.2
+  --template wordpress-plugin
 
 # 4. Open the workspace
 coder open my-plugin
@@ -50,7 +65,42 @@ coder open my-plugin
 
 ---
 
-## 🤖 Claude Code Usage
+## Claude Code Authentication
+
+Claude Code supports three authentication methods (in priority order):
+
+### 1. User OAuth Token (Pro/Max subscription — recommended)
+
+On your local machine:
+```bash
+claude setup-token
+```
+
+Copy the token and paste it into the **"Claude Code OAuth Token (User)"** parameter when creating or updating your workspace.
+
+### 2. System OAuth Token (template-level)
+
+Set once when pushing the template:
+```bash
+coder templates push wordpress-plugin \
+  --directory . \
+  --variable claude_code_oauth_token=YOUR_TOKEN
+```
+
+### 3. API Key
+
+For API users with an `sk-ant-...` key:
+```bash
+coder templates push wordpress-plugin \
+  --directory . \
+  --variable anthropic_auth_token=sk-ant-...
+```
+
+Or set in Coder admin: **Templates > Settings > Variables**
+
+---
+
+## Claude Code Usage
 
 Claude Code is available in the integrated terminal:
 
@@ -62,51 +112,63 @@ claude
 claude "add a REST API endpoint that returns all posts for this plugin"
 claude "write a PHPUnit test for the Activator class"
 claude "add a settings page with a text field and checkbox"
-claude "implement WP_List_Table for my custom post type"
 
 # Code review
 claude "review my plugin for WordPress coding standards issues"
 claude "check for security issues: missing nonces, unescaped output"
 ```
 
-The `CLAUDE.md` file in your plugin root gives Claude context about your plugin's structure and conventions automatically.
+The `CLAUDE.md` file in your workspace root is auto-generated with plugin context.
 
 ---
 
-## 📂 Plugin Structure
+## Template Parameters
+
+| Parameter | Description | Default |
+|---|---|---|
+| `plugins` | JSON array of plugins to clone `[{slug, url, branch}]` | example plugin |
+| `plugins_base_path` | Host path where plugin repos are cloned | `/home/ubuntu/plugins` |
+| `coder_access_url` | URL containers use to reach Coder server | `http://178.104.53.153:3000` |
+| `agent_arch` | CPU architecture (amd64 / arm64) | amd64 |
+| `php_version` | PHP version (8.1 / 8.2 / 8.3) | 8.2 |
+| `wp_version` | WordPress version | latest |
+| `claude_code` | Install Claude Code | true |
+| `user_claude_code_oauth_token` | Personal OAuth token from `claude setup-token` | (empty) |
+
+## Template Variables (Secrets)
+
+Set these when pushing the template or in Coder admin:
+
+| Variable | Description | Required |
+|---|---|---|
+| `claude_code_oauth_token` | System-level Claude Code OAuth token | No |
+| `anthropic_auth_token` | Anthropic API key (`sk-ant-...`) | No |
+| `git_token` | Git PAT for cloning private repos | No |
+
+---
+
+## Plugin Structure
 
 ```
-plugin/
-├── {{PLUGIN_SLUG}}.php          # Main entry point & constants
-├── composer.json                # PHP deps & scripts
-├── package.json                 # JS/CSS build via @wordpress/scripts
-├── phpunit.xml                  # Test configuration
-├── CLAUDE.md                    # Claude Code project context  ← auto-generated
-├── includes/                    # Core PHP (PSR-4 autoloaded)
-│   ├── class-plugin.php         # Bootstraps hooks
-│   ├── class-activator.php      # Activation: DB tables, defaults
-│   └── class-deactivator.php    # Cleanup on deactivate
-├── admin/
-│   ├── class-admin.php          # Admin hooks, menus, settings
-│   ├── views/                   # PHP templates for admin pages
-│   ├── css/                     # Compiled admin CSS
-│   └── js/                      # Compiled admin JS
-├── public/
-│   ├── class-public.php         # Front-end hooks
-│   ├── css/
-│   └── js/
-├── src/                         # JS/SCSS source → compiled by wp-scripts
-│   ├── index.js
-│   └── style.scss
-├── languages/                   # .pot / .po / .mo files
-└── tests/                       # PHPUnit tests
-    ├── bootstrap.php
-    └── PluginTest.php
+workspace/
+├── plugin-one/                 # Each plugin is cloned into its own directory
+│   ├── plugin-slug.php         # Main entry point & constants
+│   ├── composer.json           # PHP deps & scripts
+│   ├── package.json            # JS/CSS build via @wordpress/scripts
+│   ├── phpunit.xml             # Test configuration
+│   ├── includes/               # Core PHP (PSR-4 autoloaded)
+│   ├── admin/                  # Admin-facing code
+│   ├── public/                 # Front-end code
+│   ├── src/                    # JS/SCSS source
+│   ├── languages/              # i18n files
+│   └── tests/                  # PHPUnit tests
+├── plugin-two/
+└── CLAUDE.md                   # Auto-generated project context
 ```
 
 ---
 
-## 🛠️ Common Commands
+## Common Commands
 
 ```bash
 # Asset development
@@ -118,11 +180,10 @@ composer test          # Run PHPUnit
 composer lint          # Check WordPress coding standards
 composer lint:fix      # Auto-fix coding standard issues
 
-# WP-CLI
+# WP-CLI (runs inside WordPress container via Docker)
 wp plugin list
 wp post create --post_title="Test" --post_status=publish
 wp user list
-wp option get {{PLUGIN_SLUG}}_settings
 wp cache flush
 
 # Database
@@ -133,59 +194,22 @@ wp search-replace 'old-url' 'new-url'
 
 ---
 
-## ⚙️ Template Parameters
+## Troubleshooting
 
-| Parameter | Description | Default |
-|---|---|---|
-| `plugin_name` | Human-readable plugin name | My WordPress Plugin |
-| `plugin_slug` | Lowercase hyphenated slug | my-wordpress-plugin |
-| `php_version` | PHP version (8.1 / 8.2 / 8.3) | 8.2 |
-| `wp_version` | WordPress version | latest |
-| `claude_code` | Install Claude Code CLI | true |
+### "Peer is not connected"
+The Coder agent can't reach the Coder server. Check that `coder_access_url` is reachable from inside Docker containers. Try `http://172.17.0.1:3000` (Docker bridge gateway) if the public IP doesn't work.
 
----
+### "502 Bad Gateway" on WordPress
+Docker DNS resolves container hostnames to IPv6, but Apache only listens on IPv4. The template uses a `socat` IPv4 proxy to work around this. Check the agent startup logs for "WordPress proxy" confirmation.
 
-## 🔑 Secrets / Environment Variables
+### MySQL timeout
+Verify the MySQL container is running: `docker ps --filter "name=mysql-"`
 
-Set these in your Coder deployment or workspace environment:
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-...   # Required for Claude Code
-```
-
-In Coder admin: **Settings → Secrets** → add `ANTHROPIC_API_KEY`.
+### Permission denied on workspace files
+The workspace volume is mounted from the host as root. The startup script runs `chown -R coder:coder` to fix this. If it fails, check that the host path exists and is accessible.
 
 ---
 
-## 📋 WordPress Coding Standards Quick Reference
-
-```php
-// ✅ Always sanitize inputs
-$value = sanitize_text_field( wp_unslash( $_POST['field'] ?? '' ) );
-$id    = absint( $_GET['id'] ?? 0 );
-
-// ✅ Always escape outputs  
-echo esc_html( $title );
-echo esc_url( $link );
-echo esc_attr( $class );
-
-// ✅ Use nonces for forms
-wp_nonce_field( 'my-action', 'my-nonce' );
-check_admin_referer( 'my-action', 'my-nonce' );
-
-// ✅ Use $wpdb->prepare() for custom queries
-$wpdb->get_results( $wpdb->prepare(
-    "SELECT * FROM {$wpdb->prefix}my_table WHERE id = %d",
-    $id
-) );
-
-// ✅ Prefix everything global
-function my_plugin_helper() { ... }
-add_action( 'init', 'my_plugin_helper' );
-```
-
----
-
-## 📄 License
+## License
 
 GPL v2 or later — [https://www.gnu.org/licenses/gpl-2.0.html](https://www.gnu.org/licenses/gpl-2.0.html)
