@@ -363,7 +363,10 @@ if [ "$PLUGIN_COUNT" -gt 0 ]; then
         continue
       fi
     else
+      # Already cloned — pull latest
       CUR_BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null || echo "detached")
+      echo "  Pulling latest on $CUR_BRANCH..."
+      git -C "$DIR" pull --ff-only 2>&1 | tail -3 || echo "  Pull failed (may have local changes)"
       COMMIT=$(git -C "$DIR" log --oneline -1 2>/dev/null || echo "unknown")
       echo "  Branch: $CUR_BRANCH | $COMMIT"
     fi
