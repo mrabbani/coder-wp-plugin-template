@@ -43,8 +43,14 @@ data "coder_parameter" "agent_arch" {
   display_name = "Agent Architecture"
   default      = "amd64"
   mutable      = false
-  option { name = "amd64 (Intel/AMD)" value = "amd64" }
-  option { name = "arm64 (Graviton)"  value = "arm64" }
+  option {
+    name  = "amd64 (Intel/AMD)"
+    value = "amd64"
+  }
+  option {
+    name  = "arm64 (Graviton)"
+    value = "arm64"
+  }
 }
 
 data "coder_parameter" "php_version" {
@@ -52,9 +58,18 @@ data "coder_parameter" "php_version" {
   display_name = "PHP Version"
   default      = "8.2"
   mutable      = false
-  option { name = "PHP 8.1" value = "8.1" }
-  option { name = "PHP 8.2" value = "8.2" }
-  option { name = "PHP 8.3" value = "8.3" }
+  option {
+    name  = "PHP 8.1"
+    value = "8.1"
+  }
+  option {
+    name  = "PHP 8.2"
+    value = "8.2"
+  }
+  option {
+    name  = "PHP 8.3"
+    value = "8.3"
+  }
 }
 
 data "coder_parameter" "wp_version" {
@@ -69,8 +84,14 @@ data "coder_parameter" "claude_code" {
   display_name = "Install Claude Code"
   default      = "true"
   mutable      = false
-  option { name = "Yes" value = "true"  }
-  option { name = "No"  value = "false" }
+  option {
+    name  = "Yes"
+    value = "true"
+  }
+  option {
+    name  = "No"
+    value = "false"
+  }
 }
 
 # ── Workspace ────────────────────────────────────────────────────────────────
