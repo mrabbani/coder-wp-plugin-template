@@ -77,7 +77,7 @@ wp --path=/var/www/html plugin activate "$PLUGIN_SLUG" 2>/dev/null || true
 # ── Start code-server ─────────────────────────────────────────────────────────
 echo "🚀 Starting VS Code server..."
 code-server \
-  --bind-addr 0.0.0.0:8081 \
+  --bind-addr 127.0.0.1:8081 \
   --auth none \
   --disable-telemetry \
   "$WORKSPACE" &
@@ -93,7 +93,7 @@ $cfg['Servers'][1]['auth_type'] = 'config';
 $cfg['blowfish_secret'] = 'dev-secret-key-change-in-prod';
 PMAEOF
 cp /tmp/pma-config.php /opt/phpmyadmin/config.inc.php
-php -S 0.0.0.0:8082 -t /opt/phpmyadmin/ &>/tmp/phpmyadmin.log &
+php -S 127.0.0.1:8082 -t /opt/phpmyadmin/ &>/tmp/phpmyadmin.log &
 
 # ── Claude Code setup ─────────────────────────────────────────────────────────
 if command -v claude &>/dev/null; then

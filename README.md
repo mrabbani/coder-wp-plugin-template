@@ -33,7 +33,7 @@ git clone https://github.com/your-org/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # 2. Push the template to your Coder instance
-coder templates create wordpress-plugin \
+coder templates push wordpress-plugin \
   --directory . \
   --yes
 

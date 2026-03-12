@@ -17,7 +17,9 @@
   },
   "autoload": {
     "psr-4": {
-      "{{PLUGIN_CLASS}}\\": "includes/"
+      "{{PLUGIN_CLASS}}\\": "includes/",
+      "{{PLUGIN_CLASS}}\\Admin\\": "admin/",
+      "{{PLUGIN_CLASS}}\\Frontend\\": "public/"
     }
   },
   "autoload-dev": {

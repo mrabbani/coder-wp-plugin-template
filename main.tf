@@ -1,12 +1,34 @@
 terraform {
   required_providers {
-    coder  = { source = "coder/coder" }
-    docker = { source = "kreuzwerker/docker" }
+    coder = {
+      source  = "coder/coder"
+      version = "~> 0.12"
+    }
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "~> 3.0"
+    }
   }
 }
 
 provider "coder" {}
 provider "docker" {}
+
+# ── Variables (secrets) ──────────────────────────────────────────────────────
+
+variable "anthropic_token" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Anthropic API token for Claude Code"
+}
+
+variable "git_token" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Git personal access token for cloning private repos"
+}
 
 # ── Parameters ───────────────────────────────────────────────────────────────
 
@@ -99,10 +121,19 @@ data "coder_parameter" "claude_code" {
 data "coder_workspace"       "me" {}
 data "coder_workspace_owner" "me" {}
 
+# ── Random secret for phpMyAdmin ─────────────────────────────────────────────
+
+resource "random_string" "blowfish_secret" {
+  length  = 32
+  special = false
+}
+
 # ── Docker network ────────────────────────────────────────────────────────────
 
 resource "docker_network" "wp_network" {
-  name = "wp-${data.coder_workspace.me.id}"
+  name     = "wp-${data.coder_workspace.me.id}"
+  ipv6     = false
+  internal = false
 }
 
 # ── MySQL ─────────────────────────────────────────────────────────────────────
@@ -117,7 +148,9 @@ resource "docker_container" "mysql" {
   name    = "mysql-${data.coder_workspace.me.id}"
   restart = "unless-stopped"
 
-  networks_advanced { name = docker_network.wp_network.name }
+  networks_advanced {
+    name = docker_network.wp_network.name
+  }
 
   env = [
     "MYSQL_ROOT_PASSWORD=wordpress",
@@ -188,7 +221,9 @@ resource "docker_image" "dev" {
     }
   }
   triggers = {
-    dockerfile = filemd5("${path.module}/Dockerfile.dev")
+    dockerfile  = filemd5("${path.module}/Dockerfile.dev")
+    php_version = data.coder_parameter.php_version.value
+    claude_code = data.coder_parameter.claude_code.value
   }
 }
 
@@ -198,15 +233,18 @@ resource "docker_container" "dev" {
   name    = "dev-${data.coder_workspace.me.id}"
   restart = "unless-stopped"
 
-  networks_advanced { name = docker_network.wp_network.name }
+  networks_advanced {
+    name = docker_network.wp_network.name
+  }
 
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
     "CODER_AGENT_URL=${data.coder_parameter.coder_access_url.value}",
     "PLUGINS_JSON_B64=${base64encode(data.coder_parameter.plugins.value)}",
     "WP_HOST=wp-${data.coder_workspace.me.id}",
-    "ANTHROPIC_TOKEN=$ANTHROPIC_TOKEN",
-    "GIT_TOKEN=$GIT_TOKEN",
+    "ANTHROPIC_TOKEN=${var.anthropic_token}",
+    "GIT_TOKEN=${var.git_token}",
+    "BLOWFISH_SECRET=${random_string.blowfish_secret.result}",
   ]
 
   volumes {
@@ -222,6 +260,7 @@ resource "docker_container" "dev" {
 resource "coder_agent" "main" {
   arch = data.coder_parameter.agent_arch.value
   os   = "linux"
+  dir  = "/home/coder/workspace"
 
   startup_script = <<-EOT
 #!/usr/bin/env bash
@@ -319,19 +358,20 @@ until curl -sf "http://$${WP_HOST:-localhost}:80/" -o /dev/null 2>/dev/null; do
 done
 echo "WordPress responding"
 
-# Step 7: WP-CLI config — NO leading spaces in YAML
+# Step 7: WP-CLI config — use --ssh to run commands on the WordPress container
 mkdir -p ~/.wp-cli
 cat > ~/.wp-cli/config.yml <<WPCLIEOF
+ssh: docker:wp-$${CODER_WORKSPACE_ID:-unknown}
 path: /var/www/html
 url: http://localhost:8080
 user: admin
 WPCLIEOF
 
-# Step 8: Install WordPress
-wp --path=/var/www/html core is-installed 2>/dev/null \
+# Step 8: Install WordPress via WP-CLI over the WordPress container
+wp core is-installed 2>/dev/null \
   && echo "WordPress already installed" \
   || {
-    wp --path=/var/www/html core install \
+    wp core install \
       --url="http://localhost:8080" \
       --title="Multi-Plugin Dev" \
       --admin_user=admin \
@@ -344,7 +384,7 @@ wp --path=/var/www/html core is-installed 2>/dev/null \
 if [ "$${#SLUGS[@]}" -gt 0 ]; then
   echo "Activating plugins..."
   for SLUG in "$${SLUGS[@]}"; do
-    wp --path=/var/www/html plugin activate "$SLUG" 2>/dev/null \
+    wp plugin activate "$SLUG" 2>/dev/null \
       && echo "  OK: $SLUG" \
       || echo "  FAILED: $SLUG"
   done
@@ -401,7 +441,7 @@ code-server \
   --disable-telemetry \
   "$WORKSPACE" >/tmp/code-server.log 2>&1 &
 
-# Step 13: Start phpMyAdmin — bind to 127.0.0.1, heredoc at column 0
+# Step 13: Start phpMyAdmin — bind to 127.0.0.1
 echo "Starting phpMyAdmin..."
 cat > /opt/phpmyadmin/config.inc.php <<PMAEOF
 <?php
@@ -409,7 +449,7 @@ cat > /opt/phpmyadmin/config.inc.php <<PMAEOF
 \$cfg['Servers'][1]['user']      = 'wordpress';
 \$cfg['Servers'][1]['password']  = 'wordpress';
 \$cfg['Servers'][1]['auth_type'] = 'config';
-\$cfg['blowfish_secret']         = 'coder-dev-secret-change-me';
+\$cfg['blowfish_secret']         = '$${BLOWFISH_SECRET:-coder-dev-fallback-secret}';
 PMAEOF
 php -S 127.0.0.1:8082 -t /opt/phpmyadmin/ >/tmp/phpmyadmin.log 2>&1 &
 
@@ -435,7 +475,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
   metadata {
     display_name = "Active Plugins"
     key          = "active_plugins"
-    script       = "wp --path=/var/www/html plugin list --status=active --field=name 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo 'not ready'"
+    script       = "wp plugin list --status=active --field=name 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo 'not ready'"
     interval     = 60
     timeout      = 10
   }
@@ -447,7 +487,7 @@ resource "coder_app" "wordpress" {
   agent_id     = coder_agent.main.id
   slug         = "wordpress"
   display_name = "WordPress"
-  # Use Docker container hostname — avoids IPv6 502 errors on Hetzner
+  # Container hostname on shared network — IPv6 disabled on network to prevent 502
   url          = "http://wp-${data.coder_workspace.me.id}:80"
   icon         = "/icon/wordpress.svg"
   share        = "owner"

@@ -112,7 +112,7 @@ class AdminController {
 	 * Save settings from POST data.
 	 */
 	private function save_settings(): void {
-		check_admin_referer( '{{PLUGIN_SLUG}}-save-settings' );
+		check_admin_referer( '{{PLUGIN_SLUG}}-save-settings', '{{PLUGIN_SLUG}}_nonce' );
 
 		$settings = [
 			'enabled'     => isset( $_POST['enabled'] ) ? (bool) $_POST['enabled'] : false,
