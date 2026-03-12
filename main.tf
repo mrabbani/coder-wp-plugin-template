@@ -14,18 +14,25 @@ provider "docker" {}
 
 # ── Parameters ──────────────────────────────────────────────────────────────
 
-data "coder_parameter" "plugin_name" {
-  name         = "plugin_name"
-  display_name = "Plugin Name"
-  description  = "Your WordPress plugin's name (e.g. My Awesome Plugin)"
-  default      = "My WordPress Plugin"
+data "coder_parameter" "repo_url" {
+  name         = "repo_url"
+  display_name = "Plugin Repository URL"
+  description  = "HTTPS or SSH URL of your existing plugin repo (e.g. https://github.com/org/my-plugin)"
+  mutable      = true
+}
+
+data "coder_parameter" "repo_branch" {
+  name         = "repo_branch"
+  display_name = "Branch"
+  description  = "Git branch to check out"
+  default      = "main"
   mutable      = true
 }
 
 data "coder_parameter" "plugin_slug" {
   name         = "plugin_slug"
   display_name = "Plugin Slug"
-  description  = "Lowercase, hyphenated plugin slug (e.g. my-wordpress-plugin)"
+  description  = "Folder name of the plugin inside wp-content/plugins/ (usually same as repo name)"
   default      = "my-wordpress-plugin"
   mutable      = true
 }
@@ -175,10 +182,14 @@ resource "docker_container" "dev" {
 
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
-    "PLUGIN_NAME=${data.coder_parameter.plugin_name.value}",
+    "PLUGIN_REPO_URL=${data.coder_parameter.repo_url.value}",
+    "PLUGIN_REPO_BRANCH=${data.coder_parameter.repo_branch.value}",
     "PLUGIN_SLUG=${data.coder_parameter.plugin_slug.value}",
     "WP_HOST=wp-${data.coder_workspace.me.id}",
-    "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY",
+    # Anthropic auth token — set in Coder Secrets as ANTHROPIC_TOKEN
+    "ANTHROPIC_TOKEN=$ANTHROPIC_TOKEN",
+    # Git token for private repos — set in Coder Secrets as GIT_TOKEN
+    "GIT_TOKEN=$GIT_TOKEN",
   ]
 
   volumes {
@@ -198,7 +209,234 @@ resource "docker_volume" "workspace" {
 resource "coder_agent" "main" {
   arch           = "amd64"
   os             = "linux"
-  startup_script = file("${path.module}/scripts/startup.sh")
+  startup_script = <<-EOT
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_SLUG="$${PLUGIN_SLUG:-my-wordpress-plugin}"
+PLUGIN_REPO_URL="$${PLUGIN_REPO_URL:-}"
+PLUGIN_REPO_BRANCH="$${PLUGIN_REPO_BRANCH:-main}"
+WORKSPACE="/home/coder/workspace"
+PLUGIN_DIR="$WORKSPACE/plugin"
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  WordPress Plugin Dev Workspace"
+echo "  Repo:   $PLUGIN_REPO_URL"
+echo "  Branch: $PLUGIN_REPO_BRANCH"
+echo "  Slug:   $PLUGIN_SLUG"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+mkdir -p "$WORKSPACE"
+
+# ── Git credentials for private repos ────────────────────────────────────────
+if [ -n "$${GIT_TOKEN:-}" ]; then
+  git config --global credential.helper store
+  GIT_HOST=$(echo "$PLUGIN_REPO_URL" | sed -E 's|https://([^/]+)/.*|\1|')
+  echo "https://oauth2:$${GIT_TOKEN}@$${GIT_HOST}" > ~/.git-credentials
+  chmod 600 ~/.git-credentials
+  echo "🔑 Git credentials configured for $GIT_HOST"
+fi
+
+git config --global user.email "dev@coder.local"
+git config --global user.name "Coder Dev"
+
+# ── Clone or update the plugin repo ──────────────────────────────────────────
+if [ -z "$PLUGIN_REPO_URL" ]; then
+  echo "❌ PLUGIN_REPO_URL is not set. Set it in workspace parameters."
+  exit 1
+fi
+
+if [ -d "$PLUGIN_DIR/.git" ]; then
+  echo "🔄 Plugin repo exists — pulling latest ($PLUGIN_REPO_BRANCH)..."
+  cd "$PLUGIN_DIR"
+  git fetch origin
+  git checkout "$PLUGIN_REPO_BRANCH"
+  git pull origin "$PLUGIN_REPO_BRANCH"
+  echo "✅ Repo updated"
+else
+  echo "📥 Cloning $PLUGIN_REPO_URL ($PLUGIN_REPO_BRANCH)..."
+  git clone \
+    --branch "$PLUGIN_REPO_BRANCH" \
+    --single-branch \
+    "$PLUGIN_REPO_URL" \
+    "$PLUGIN_DIR"
+  echo "✅ Repo cloned to $PLUGIN_DIR"
+fi
+
+# ── Detect plugin metadata from main plugin file ──────────────────────────────
+MAIN_PHP=$(find "$PLUGIN_DIR" -maxdepth 1 -name "*.php" \
+  -exec grep -l "Plugin Name:" {} \; | head -1 || true)
+
+if [ -n "$MAIN_PHP" ]; then
+  PLUGIN_NAME=$(grep -i "Plugin Name:" "$MAIN_PHP" | sed 's/.*Plugin Name:[[:space:]]*//' | tr -d '\r')
+  PLUGIN_VERSION=$(grep -i "^.*Version:" "$MAIN_PHP" | head -1 | sed 's/.*Version:[[:space:]]*//' | tr -d '\r')
+  echo "📋 Detected: $PLUGIN_NAME v$${PLUGIN_VERSION:-unknown}"
+else
+  PLUGIN_NAME="$PLUGIN_SLUG"
+fi
+
+# ── Install Composer dependencies ─────────────────────────────────────────────
+if [ -f "$PLUGIN_DIR/composer.json" ]; then
+  echo "📦 Installing Composer dependencies..."
+  cd "$PLUGIN_DIR" && composer install --no-interaction --prefer-dist 2>&1 | tail -5
+fi
+
+# ── Install npm dependencies ──────────────────────────────────────────────────
+if [ -f "$PLUGIN_DIR/package.json" ]; then
+  echo "📦 Installing npm dependencies..."
+  cd "$PLUGIN_DIR" && npm install --silent
+fi
+
+# ── Wait for MySQL ────────────────────────────────────────────────────────────
+echo "⏳ Waiting for MySQL..."
+until mysqladmin ping -h"$${WP_HOST:-localhost}" --silent 2>/dev/null; do
+  sleep 2
+done
+echo "✅ MySQL ready"
+
+# ── Wait for WordPress ────────────────────────────────────────────────────────
+echo "⏳ Waiting for WordPress..."
+sleep 5
+
+# ── Configure WP-CLI ─────────────────────────────────────────────────────────
+mkdir -p ~/.wp-cli
+cat > ~/.wp-cli/config.yml <<EOF
+path: /var/www/html
+url: http://localhost:8080
+user: admin
+EOF
+
+# ── Install WordPress ─────────────────────────────────────────────────────────
+echo "⚙️  Configuring WordPress..."
+wp --path=/var/www/html core install \
+  --url="http://localhost:8080" \
+  --title="Dev — $${PLUGIN_NAME}" \
+  --admin_user=admin \
+  --admin_password=admin \
+  --admin_email=dev@local.test \
+  --skip-email 2>/dev/null || echo "ℹ️  WordPress already installed"
+
+# Symlink plugin into wp-content/plugins if not mounted
+WP_PLUGIN_DIR="/var/www/html/wp-content/plugins/$PLUGIN_SLUG"
+if [ ! -e "$WP_PLUGIN_DIR" ]; then
+  ln -sf "$PLUGIN_DIR" "$WP_PLUGIN_DIR"
+  echo "🔗 Symlinked plugin → $WP_PLUGIN_DIR"
+fi
+
+wp --path=/var/www/html plugin activate "$PLUGIN_SLUG" 2>/dev/null \
+  && echo "✅ Plugin activated" \
+  || echo "⚠️  Plugin activation failed — check PHP errors"
+
+# ── Anthropic auth token for Claude Code ─────────────────────────────────────
+if [ -n "$${ANTHROPIC_TOKEN:-}" ]; then
+  mkdir -p ~/.config/anthropic
+  cat > ~/.config/anthropic/auth.json <<AUTHEOF
+{
+  "type": "token",
+  "token": "$${ANTHROPIC_TOKEN}"
+}
+AUTHEOF
+  chmod 600 ~/.config/anthropic/auth.json
+  echo "🔑 Anthropic auth token configured"
+fi
+
+# ── Generate CLAUDE.md for the existing plugin ───────────────────────────────
+if command -v claude &>/dev/null && [ ! -f "$PLUGIN_DIR/CLAUDE.md" ]; then
+  echo "🤖 Generating CLAUDE.md project context..."
+
+  HAS_COMPOSER=$([ -f "$PLUGIN_DIR/composer.json" ] && echo "yes" || echo "no")
+  HAS_NPM=$([ -f "$PLUGIN_DIR/package.json" ] && echo "yes" || echo "no")
+  HAS_TESTS=$([ -d "$PLUGIN_DIR/tests" ] && echo "yes" || echo "no")
+  WP_VERSION=$(wp --path=/var/www/html core version 2>/dev/null || echo "latest")
+  PHP_VER=$(php -r "echo PHP_VERSION;")
+
+  # Compact directory tree (no vendor/node_modules/.git)
+  TREE=$(find "$PLUGIN_DIR" -maxdepth 3 \
+    -not -path "*/vendor/*" \
+    -not -path "*/node_modules/*" \
+    -not -path "*/.git/*" \
+    -not -path "*/build/*" \
+    | sed "s|$PLUGIN_DIR/||" | sort | head -50)
+
+  cat > "$PLUGIN_DIR/CLAUDE.md" <<CLAUDEEOF
+# Claude Code — Project Context
+
+## Plugin
+- **Name**: $${PLUGIN_NAME}
+- **Slug**: $${PLUGIN_SLUG}
+- **Repo**: $${PLUGIN_REPO_URL}  (branch: \`$${PLUGIN_REPO_BRANCH}\`)
+- **Main file**: $(basename "$${MAIN_PHP:-$PLUGIN_SLUG.php}")
+
+## Environment
+- PHP $${PHP_VER} + WordPress $${WP_VERSION}
+- Composer: $${HAS_COMPOSER}  |  npm / @wordpress/scripts: $${HAS_NPM}  |  PHPUnit: $${HAS_TESTS}
+- Live site: http://localhost:8080
+- Debug log: /var/www/html/wp-content/debug.log
+
+## Directory Tree
+\`\`\`
+$${TREE}
+\`\`\`
+
+## Common Commands
+$([ "$HAS_COMPOSER" = "yes" ] && printf '- `composer install`   — PHP dependencies\n- `composer test`      — run PHPUnit\n- `composer lint`      — WordPress Coding Standards')
+$([ "$HAS_NPM" = "yes" ] && printf '\n- `npm run build`      — production JS/CSS build\n- `npm run start`      — watch + rebuild')
+- \`wp plugin list\`    — list active plugins
+- \`wp option get $${PLUGIN_SLUG}_settings\`
+- \`tail -f /var/www/html/wp-content/debug.log\`
+
+## WordPress Security Checklist
+- Sanitize inputs: \`sanitize_text_field()\`, \`absint()\`, \`wp_unslash()\`
+- Escape outputs: \`esc_html()\`, \`esc_url()\`, \`esc_attr()\`
+- Nonces on all forms and AJAX: \`check_admin_referer()\` / \`check_ajax_referer()\`
+- Use \`\$wpdb->prepare()\` for all custom SQL
+CLAUDEEOF
+
+  echo "✅ CLAUDE.md written"
+elif [ -f "$PLUGIN_DIR/CLAUDE.md" ]; then
+  echo "ℹ️  CLAUDE.md already exists — skipping generation"
+fi
+
+# ── Start code-server (open plugin folder directly) ───────────────────────────
+echo "🚀 Starting VS Code server..."
+code-server \
+  --bind-addr 0.0.0.0:8081 \
+  --auth none \
+  --disable-telemetry \
+  "$PLUGIN_DIR" &
+
+# ── Start phpMyAdmin ──────────────────────────────────────────────────────────
+echo "🚀 Starting phpMyAdmin..."
+cat > /opt/phpmyadmin/config.inc.php <<PMAEOF
+<?php
+\$cfg['Servers'][1]['host']      = getenv('WP_HOST') ?: 'localhost';
+\$cfg['Servers'][1]['user']      = 'wordpress';
+\$cfg['Servers'][1]['password']  = 'wordpress';
+\$cfg['Servers'][1]['auth_type'] = 'config';
+\$cfg['blowfish_secret']         = 'coder-dev-secret-change-me';
+PMAEOF
+php -S 0.0.0.0:8082 -t /opt/phpmyadmin/ &>/tmp/phpmyadmin.log &
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ✅ Workspace ready!"
+echo ""
+echo "  🌐 WordPress:   http://localhost:8080"
+echo "  👤 WP Admin:    http://localhost:8080/wp-admin  (admin / admin)"
+echo "  💻 VS Code:     http://localhost:8081"
+echo "  🗄️  phpMyAdmin:  http://localhost:8082"
+echo ""
+echo "  📂 Plugin:      $PLUGIN_DIR"
+echo "  🔌 Active:      $PLUGIN_SLUG"
+echo "  🌿 Branch:      $PLUGIN_REPO_BRANCH"
+echo ""
+echo "  🤖 Claude Code (auth token ready):"
+echo "     claude                             # interactive session"
+echo "     claude 'explain this plugin'       # one-shot"
+echo "     claude 'add a REST API endpoint'   # build features"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  EOT
 
   metadata {
     display_name = "PHP Version"
