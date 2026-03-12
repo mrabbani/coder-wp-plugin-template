@@ -200,12 +200,8 @@ resource "docker_container" "wordpress" {
     }
   }
 
-  # Explicitly bind to IPv4 — avoids Coder proxy 502 IPv6 errors on Hetzner
-  ports {
-    internal = 80
-    external = 8080
-    ip       = "0.0.0.0"
-  }
+  # No host port mapping needed — dev container reaches WordPress
+  # via Docker network hostname (wp-{id}:80) directly.
 }
 
 # ── Dev container ─────────────────────────────────────────────────────────────
@@ -237,6 +233,10 @@ resource "docker_container" "dev" {
     name = docker_network.wp_network.name
   }
 
+  # Force WordPress and MySQL hostnames to resolve via IPv4 inside this container.
+  # Docker embedded DNS returns AAAA (IPv6) records even on IPv4-only networks,
+  # which causes "connection refused" 502 errors when the Coder agent proxies requests.
+  # The actual IPv4 is resolved at startup in the init script and written to /etc/hosts.
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
     "CODER_AGENT_URL=${data.coder_parameter.coder_access_url.value}",
@@ -250,6 +250,12 @@ resource "docker_container" "dev" {
   volumes {
     host_path      = data.coder_parameter.plugins_base_path.value
     container_path = "/home/coder/workspace"
+  }
+
+  # Docker socket — needed for WP-CLI ssh:docker: transport
+  volumes {
+    host_path      = "/var/run/docker.sock"
+    container_path = "/var/run/docker.sock"
   }
 
   command = ["/bin/bash", "-c", coder_agent.main.init_script]
@@ -272,6 +278,26 @@ WORKSPACE="/home/coder/workspace"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  WordPress Multi-Plugin Dev Workspace"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Step 0: Start socat IPv4 proxy for WordPress container
+# Docker embedded DNS returns AAAA (IPv6) records for container hostnames,
+# but Apache only listens on IPv4 — causing 502 "connection refused" errors.
+# socat explicitly connects over TCP4, bypassing DNS IPv6 entirely.
+WP_CONTAINER="$${WP_HOST:-localhost}"
+if [ "$WP_CONTAINER" != "localhost" ]; then
+  echo "Starting IPv4 proxy for WordPress ($WP_CONTAINER)..."
+  # Wait for the WordPress container to be reachable on IPv4
+  for attempt in $(seq 1 30); do
+    WP_IPV4=$(getent ahostsv4 "$WP_CONTAINER" 2>/dev/null | awk 'NR==1{print $1}')
+    if [ -n "$WP_IPV4" ]; then
+      echo "Resolved $WP_CONTAINER -> $WP_IPV4"
+      socat TCP-LISTEN:8080,bind=127.0.0.1,fork,reuseaddr TCP4:$${WP_IPV4}:80 &
+      echo "WordPress proxy: 127.0.0.1:8080 -> $${WP_IPV4}:80"
+      break
+    fi
+    sleep 2
+  done
+fi
 
 # Step 1: Install jq FIRST before any JSON parsing
 if ! command -v jq &>/dev/null; then
@@ -358,14 +384,17 @@ until curl -sf "http://$${WP_HOST:-localhost}:80/" -o /dev/null 2>/dev/null; do
 done
 echo "WordPress responding"
 
-# Step 7: WP-CLI config — use --ssh to run commands on the WordPress container
+# Step 7: WP-CLI config — run commands inside the WordPress container via Docker
+# Requires Docker socket mounted into the dev container
 mkdir -p ~/.wp-cli
 cat > ~/.wp-cli/config.yml <<WPCLIEOF
-ssh: docker:wp-$${CODER_WORKSPACE_ID:-unknown}
+ssh: docker:$${WP_HOST:-localhost}
 path: /var/www/html
-url: http://localhost:8080
+url: http://127.0.0.1:8080
 user: admin
 WPCLIEOF
+# Ensure coder user can access Docker socket
+sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 
 # Step 8: Install WordPress via WP-CLI over the WordPress container
 wp core is-installed 2>/dev/null \
@@ -487,8 +516,8 @@ resource "coder_app" "wordpress" {
   agent_id     = coder_agent.main.id
   slug         = "wordpress"
   display_name = "WordPress"
-  # Container hostname on shared network — IPv6 disabled on network to prevent 502
-  url          = "http://wp-${data.coder_workspace.me.id}:80"
+  # Local socat proxy — forwards to WordPress container over IPv4 only
+  url          = "http://127.0.0.1:8080"
   icon         = "/icon/wordpress.svg"
   share        = "owner"
   subdomain    = true

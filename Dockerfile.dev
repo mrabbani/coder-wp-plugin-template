@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libzip-dev libxml2-dev libonig-dev libpng-dev libjpeg-dev \
     default-mysql-client \
     nodejs npm \
-    sudo less jq \
+    sudo less jq socat docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # ── PHP extensions ───────────────────────────────────────────────────────────
