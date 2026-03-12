@@ -46,6 +46,30 @@ data "coder_parameter" "plugins_base_path" {
   mutable      = true
 }
 
+data "coder_parameter" "agent_arch" {
+  name         = "agent_arch"
+  display_name = "Agent Architecture"
+  description  = "CPU architecture of your Coder server"
+  default      = "amd64"
+  mutable      = false
+  option {
+    name  = "amd64 (Intel/AMD)"
+    value = "amd64"
+  }
+  option {
+    name  = "arm64 (AWS Graviton / Apple Silicon)"
+    value = "arm64"
+  }
+}
+
+data "coder_parameter" "coder_access_url" {
+  name         = "coder_access_url"
+  display_name = "Coder Access URL"
+  description  = "The URL containers use to reach the Coder server (must be reachable from Docker, not localhost)"
+  default      = "http://172.17.0.1:3000"
+  mutable      = true
+}
+
 data "coder_parameter" "php_version" {
   name         = "php_version"
   display_name = "PHP Version"
@@ -199,8 +223,10 @@ resource "docker_container" "dev" {
 
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
+    # Tell the agent exactly where to reach the Coder server from inside Docker
+    "CODER_AGENT_URL=${data.coder_parameter.coder_access_url.value}",
     # JSON array of {url, slug, branch} objects — from workspace parameter
-    "PLUGINS_JSON=${data.coder_parameter.plugins.value}",
+    "PLUGINS_JSON_B64=${base64encode(data.coder_parameter.plugins.value)}",
     "WP_HOST=wp-${data.coder_workspace.me.id}",
     # Anthropic auth token — set in Coder Secrets as ANTHROPIC_TOKEN
     "ANTHROPIC_TOKEN=$ANTHROPIC_TOKEN",
@@ -224,207 +250,266 @@ resource "docker_volume" "workspace" {
 # ── Coder agent ──────────────────────────────────────────────────────────────
 
 resource "coder_agent" "main" {
-  arch           = "amd64"
+  arch           = data.coder_parameter.agent_arch.value
   os             = "linux"
   startup_script = <<-EOT
-    #!/usr/bin/env bash
-    set -euo pipefail
+#!/usr/bin/env bash
+# Do NOT use set -e — let the agent stay alive even if steps fail
+set -uo pipefail
 
-    WORKSPACE="/home/coder/workspace"
-    PLUGINS_JSON='$${PLUGINS_JSON:-[]}'
+WORKSPACE="/home/coder/workspace"
 
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  WordPress Multi-Plugin Dev Workspace"
-    echo "  Plugins mounted from host via Docker volume"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  WordPress Multi-Plugin Dev Workspace"
+echo "  Plugins mounted from host via Docker volume"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    if ! command -v jq &>/dev/null; then
-      sudo apt-get install -y jq -qq
+# ── Step 1: Install jq FIRST before any JSON parsing ─────────────────────────
+echo "⏳ Checking dependencies..."
+if ! command -v jq &>/dev/null; then
+  echo "   Installing jq..."
+  sudo apt-get update -qq && sudo apt-get install -y jq -qq 2>/dev/null \
+    || apt-get update -qq && apt-get install -y jq -qq 2>/dev/null \
+    || echo "⚠️  Could not install jq"
+fi
+echo "   jq: $(jq --version 2>/dev/null || echo 'not found')"
+
+# ── Step 2: Decode PLUGINS_JSON safely ───────────────────────────────────────
+# base64 decode — handle both GNU (--decode) and BusyBox (-d)
+if [ -n "$${PLUGINS_JSON_B64:-}" ]; then
+  PLUGINS_JSON=$(echo "$${PLUGINS_JSON_B64}" | base64 --decode 2>/dev/null \
+              || echo "$${PLUGINS_JSON_B64}" | base64 -d 2>/dev/null \
+              || echo "[]")
+else
+  PLUGINS_JSON="[]"
+fi
+
+# Validate JSON — if still broken, default to empty array
+if ! echo "$PLUGINS_JSON" | jq empty 2>/dev/null; then
+  echo "⚠️  PLUGINS_JSON is not valid JSON, defaulting to []"
+  echo "   Raw value: $${PLUGINS_JSON_B64:-empty}"
+  PLUGINS_JSON="[]"
+fi
+
+PLUGIN_COUNT=$(echo "$PLUGINS_JSON" | jq 'length')
+echo "📦 $PLUGIN_COUNT plugin(s) configured"
+
+# ── Step 3: Git config ────────────────────────────────────────────────────────
+git config --global user.email "dev@coder.local"
+git config --global user.name "Coder Dev"
+
+if [ -n "$${GIT_TOKEN:-}" ]; then
+  git config --global credential.helper store
+  echo "$PLUGINS_JSON" | jq -r '.[].url // empty' 2>/dev/null \
+    | sed -E 's|https://([^/]+)/.*|\1|' | sort -u \
+    | while read -r GIT_HOST; do
+        echo "https://oauth2:$${GIT_TOKEN}@$${GIT_HOST}" >> ~/.git-credentials
+      done
+  chmod 600 ~/.git-credentials 2>/dev/null || true
+  echo "🔑 Git credentials configured"
+fi
+
+# ── Step 4: Process each plugin dir ──────────────────────────────────────────
+SLUGS=()
+
+if [ "$PLUGIN_COUNT" -gt 0 ]; then
+  for i in $(seq 0 $((PLUGIN_COUNT - 1))); do
+    PLUGIN_SLUG=$(echo "$PLUGINS_JSON" | jq -r ".[$i].slug // empty")
+    [ -z "$PLUGIN_SLUG" ] && continue
+
+    PLUGIN_DIR="$WORKSPACE/$PLUGIN_SLUG"
+    SLUGS+=("$PLUGIN_SLUG")
+
+    echo ""
+    echo "── Plugin: $PLUGIN_SLUG ──────────────────────────────"
+
+    if [ ! -d "$PLUGIN_DIR" ]; then
+      echo "   ⚠️  Not found: $PLUGIN_DIR"
+      echo "   Clone it on the host first:"
+      echo "   cd \$(dirname $WORKSPACE) && git clone <url> $PLUGIN_SLUG"
+      continue
     fi
 
-    PLUGIN_COUNT=$(echo "$PLUGINS_JSON" | jq 'length')
-    echo "📦 $PLUGIN_COUNT plugin(s) mounted"
+    if [ -d "$PLUGIN_DIR/.git" ]; then
+      BRANCH=$(git -C "$PLUGIN_DIR" branch --show-current 2>/dev/null || echo "unknown")
+      COMMIT=$(git -C "$PLUGIN_DIR" log --oneline -1 2>/dev/null || echo "unknown")
+      echo "   🌿 $BRANCH | $COMMIT"
+    fi
 
-    # ── Install deps for each plugin (already on disk via host mount) ─────────
-    SLUGS=()
+    if [ -f "$PLUGIN_DIR/composer.json" ]; then
+      echo "   📦 composer install..."
+      (cd "$PLUGIN_DIR" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -3) || true
+    fi
+
+    if [ -f "$PLUGIN_DIR/package.json" ]; then
+      echo "   📦 npm install..."
+      (cd "$PLUGIN_DIR" && npm install --silent 2>&1 | tail -3) || true
+    fi
+
+    echo "   ✅ $PLUGIN_SLUG ready"
+  done
+else
+  echo "⚠️  No plugins configured — workspace will start without any plugins"
+fi
+
+# ── Step 5: Wait for MySQL ────────────────────────────────────────────────────
+echo ""
+echo "⏳ Waiting for MySQL at $${WP_HOST:-localhost}..."
+MAX_TRIES=30
+TRIES=0
+until mysqladmin ping -h"$${WP_HOST:-localhost}" -u wordpress -pwordpress --silent 2>/dev/null; do
+  TRIES=$((TRIES + 1))
+  if [ "$TRIES" -ge "$MAX_TRIES" ]; then
+    echo "⚠️  MySQL not ready after $MAX_TRIES attempts — continuing anyway"
+    break
+  fi
+  sleep 3
+done
+echo "✅ MySQL ready"
+
+# ── Step 6: Wait for WordPress ───────────────────────────────────────────────
+echo "⏳ Waiting for WordPress to initialize..."
+MAX_TRIES=20
+TRIES=0
+until curl -sf "http://$${WP_HOST:-localhost}:80/" -o /dev/null 2>/dev/null; do
+  TRIES=$((TRIES + 1))
+  [ "$TRIES" -ge "$MAX_TRIES" ] && break
+  sleep 3
+done
+echo "✅ WordPress container responding"
+
+# ── Step 7: WP-CLI config ─────────────────────────────────────────────────────
+mkdir -p ~/.wp-cli
+# NOTE: No indentation inside heredoc — yaml is whitespace-sensitive
+cat > ~/.wp-cli/config.yml <<WPCLIEOF
+path: /var/www/html
+url: http://localhost:8080
+user: admin
+WPCLIEOF
+
+# ── Step 8: Install WordPress ─────────────────────────────────────────────────
+echo "⚙️  Installing WordPress..."
+wp --path=/var/www/html core install \
+  --url="http://localhost:8080" \
+  --title="Multi-Plugin Dev" \
+  --admin_user=admin \
+  --admin_password=admin \
+  --admin_email=dev@local.test \
+  --skip-email 2>/dev/null \
+  && echo "✅ WordPress installed" \
+  || echo "ℹ️  WordPress already installed"
+
+# ── Step 9: Activate each plugin ─────────────────────────────────────────────
+if [ "$${#SLUGS[@]}" -gt 0 ]; then
+  echo ""
+  echo "🔌 Activating plugins..."
+  for SLUG in "$${SLUGS[@]}"; do
+    wp --path=/var/www/html plugin activate "$SLUG" 2>/dev/null \
+      && echo "   ✅ $SLUG activated" \
+      || echo "   ⚠️  $SLUG failed — check debug.log"
+  done
+fi
+
+# ── Step 10: Anthropic auth token ────────────────────────────────────────────
+if [ -n "$${ANTHROPIC_TOKEN:-}" ]; then
+  mkdir -p ~/.config/anthropic
+# NOTE: No indentation — heredoc content must start at column 0
+cat > ~/.config/anthropic/auth.json <<AUTHEOF
+{
+  "type": "token",
+  "token": "$${ANTHROPIC_TOKEN}"
+}
+AUTHEOF
+  chmod 600 ~/.config/anthropic/auth.json
+  echo "🔑 Anthropic auth token configured"
+fi
+
+# ── Step 11: Generate CLAUDE.md ───────────────────────────────────────────────
+CLAUDE_MD="$WORKSPACE/CLAUDE.md"
+if [ ! -f "$CLAUDE_MD" ] && [ "$PLUGIN_COUNT" -gt 0 ]; then
+  {
+    echo "# Claude Code — Multi-Plugin Workspace"
+    echo ""
+    echo "## Active Plugins"
     for i in $(seq 0 $((PLUGIN_COUNT - 1))); do
-      PLUGIN_SLUG=$(echo "$PLUGINS_JSON" | jq -r ".[$i].slug")
-      PLUGIN_DIR="$WORKSPACE/$PLUGIN_SLUG"
-      SLUGS+=("$PLUGIN_SLUG")
-
+      SLUG=$(echo "$PLUGINS_JSON"   | jq -r ".[$i].slug   // empty")
+      URL=$(echo "$PLUGINS_JSON"    | jq -r ".[$i].url    // \"(local)\"")
+      BRANCH=$(echo "$PLUGINS_JSON" | jq -r ".[$i].branch // \"main\"")
+      DIR="$WORKSPACE/$SLUG"
+      MAIN_PHP=$(find "$DIR" -maxdepth 1 -name "*.php" \
+        -exec grep -l "Plugin Name:" {} \; 2>/dev/null | head -1 || true)
+      NAME=$([ -n "$MAIN_PHP" ] \
+        && grep -i "Plugin Name:" "$MAIN_PHP" | sed 's/.*Plugin Name:[[:space:]]*//' | tr -d '\r' \
+        || echo "$SLUG")
+      echo "### $NAME (\`$SLUG\`)"
+      echo "- Repo: $URL  branch: \`$BRANCH\`"
+      echo "- Dir:  \`$DIR\`"
+      echo "- Composer: $([ -f "$DIR/composer.json" ] && echo yes || echo no)"
+      echo "- npm:      $([ -f "$DIR/package.json" ]  && echo yes || echo no)"
+      echo "- Tests:    $([ -d "$DIR/tests" ]          && echo yes || echo no)"
       echo ""
-      echo "── $PLUGIN_SLUG ─────────────────────────────────────"
-
-      if [ ! -d "$PLUGIN_DIR" ]; then
-        echo "   ⚠️  Directory not found: $PLUGIN_DIR"
-        echo "   Make sure the repo is cloned on the host at:"
-        echo "   Check the plugins_base_path you set in workspace parameters"
-        continue
-      fi
-
-      # Show current git branch/commit
-      if [ -d "$PLUGIN_DIR/.git" ]; then
-        BRANCH=$(git -C "$PLUGIN_DIR" branch --show-current 2>/dev/null || echo "unknown")
-        COMMIT=$(git -C "$PLUGIN_DIR" log --oneline -1 2>/dev/null || echo "unknown")
-        echo "   🌿 Branch: $BRANCH  |  $COMMIT"
-      fi
-
-      if [ -f "$PLUGIN_DIR/composer.json" ]; then
-        echo "   📦 composer install..."
-        cd "$PLUGIN_DIR" && composer install --no-interaction --prefer-dist -q
-      fi
-
-      if [ -f "$PLUGIN_DIR/package.json" ]; then
-        echo "   📦 npm install..."
-        cd "$PLUGIN_DIR" && npm install --silent
-      fi
-
-      echo "   ✅ ready"
     done
-
-    # ── Configure git for all plugin dirs ────────────────────────────────────
-    git config --global user.email "dev@coder.local"
-    git config --global user.name "Coder Dev"
-
-    if [ -n "$${GIT_TOKEN:-}" ]; then
-      git config --global credential.helper store
-      echo "$PLUGINS_JSON" | jq -r '.[].url // empty' \
-        | sed -E 's|https://([^/]+)/.*|\1|' | sort -u \
-        | while read -r HOST; do
-            echo "https://oauth2:$${GIT_TOKEN}@$${HOST}" >> ~/.git-credentials
-          done
-      chmod 600 ~/.git-credentials
-      echo "🔑 Git credentials configured"
-    fi
-
-    # ── Wait for MySQL ────────────────────────────────────────────────────────
+    echo "## Environment"
+    echo "- PHP $(php -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)"
+    echo "- WordPress $(wp --path=/var/www/html core version 2>/dev/null || echo unknown)"
+    echo "- Debug log: tail -f /var/www/html/wp-content/debug.log"
     echo ""
-    echo "⏳ Waiting for MySQL..."
-    until mysqladmin ping -h"$${WP_HOST:-localhost}" --silent 2>/dev/null; do
-      sleep 2
-    done
-    echo "✅ MySQL ready"
-
-    echo "⏳ Waiting for WordPress..."
-    sleep 5
-
-    # ── Configure WP-CLI ─────────────────────────────────────────────────────
-    mkdir -p ~/.wp-cli
-    cat > ~/.wp-cli/config.yml <<WPCLIEOF
-    path: /var/www/html
-    url: http://localhost:8080
-    user: admin
-    WPCLIEOF
-
-    # ── Install WordPress ─────────────────────────────────────────────────────
-    echo "⚙️  Configuring WordPress..."
-    wp --path=/var/www/html core install \
-      --url="http://localhost:8080" \
-      --title="Multi-Plugin Dev" \
-      --admin_user=admin \
-      --admin_password=admin \
-      --admin_email=dev@local.test \
-      --skip-email 2>/dev/null || echo "ℹ️  Already installed"
-
-    # ── Activate each plugin (already mounted by Docker) ─────────────────────
-    echo ""
-    echo "🔌 Activating plugins..."
+    echo "## Commands"
+    echo '```bash'
     for SLUG in "$${SLUGS[@]}"; do
-      wp --path=/var/www/html plugin activate "$SLUG" 2>/dev/null \
-        && echo "   ✅ $SLUG" \
-        || echo "   ⚠️  $SLUG — check /var/www/html/wp-content/debug.log"
+      echo "cd ~/workspace/$SLUG"
     done
+    echo "git pull && git add . && git commit -m 'feat: ...' && git push"
+    echo "wp plugin list"
+    echo "wp cache flush"
+    echo "tail -f /var/www/html/wp-content/debug.log"
+    echo '```'
+  } > "$CLAUDE_MD"
+  echo "✅ CLAUDE.md generated"
+fi
 
-    # ── Anthropic auth token ──────────────────────────────────────────────────
-    if [ -n "$${ANTHROPIC_TOKEN:-}" ]; then
-      mkdir -p ~/.config/anthropic
-      cat > ~/.config/anthropic/auth.json <<AUTHEOF
-    {
-      "type": "token",
-      "token": "$${ANTHROPIC_TOKEN}"
-    }
-    AUTHEOF
-      chmod 600 ~/.config/anthropic/auth.json
-      echo "🔑 Anthropic auth token configured"
-    fi
+# ── Step 12: Start VS Code ────────────────────────────────────────────────────
+echo "🚀 Starting VS Code..."
+code-server \
+  --bind-addr 0.0.0.0:8081 \
+  --auth none \
+  --disable-telemetry \
+  "$WORKSPACE" >/tmp/code-server.log 2>&1 &
+echo "   PID $!"
 
-    # ── Generate CLAUDE.md ────────────────────────────────────────────────────
-    CLAUDE_MD="$WORKSPACE/CLAUDE.md"
-    if [ ! -f "$CLAUDE_MD" ]; then
-      {
-        echo "# Claude Code — Multi-Plugin Workspace"
-        echo ""
-        echo "## Active Plugins"
-        echo ""
-        for i in $(seq 0 $((PLUGIN_COUNT - 1))); do
-          SLUG=$(echo "$PLUGINS_JSON"   | jq -r ".[$i].slug")
-          URL=$(echo "$PLUGINS_JSON"    | jq -r ".[$i].url // \"(local)\"")
-          BRANCH=$(echo "$PLUGINS_JSON" | jq -r ".[$i].branch // \"main\"")
-          DIR="$WORKSPACE/$SLUG"
-          MAIN_PHP=$(find "$DIR" -maxdepth 1 -name "*.php" \
-            -exec grep -l "Plugin Name:" {} \; 2>/dev/null | head -1 || true)
-          NAME=$([ -n "$MAIN_PHP" ] \
-            && grep -i "Plugin Name:" "$MAIN_PHP" | sed 's/.*Plugin Name:[[:space:]]*//' | tr -d '\r' \
-            || echo "$SLUG")
-          echo "### $NAME (\`$SLUG\`)"
-          echo "- Repo: $URL  branch: \`$BRANCH\`"
-          echo "- Dir:  \`$DIR\`"
-          echo "- Composer: $([ -f "$DIR/composer.json" ] && echo yes || echo no) | npm: $([ -f "$DIR/package.json" ] && echo yes || echo no) | Tests: $([ -d "$DIR/tests" ] && echo yes || echo no)"
-          echo ""
-        done
-        echo "## Environment"
-        echo "- PHP $(php -r 'echo PHP_VERSION;') + WordPress $(wp --path=/var/www/html core version 2>/dev/null || echo latest)"
-        echo "- Plugins mounted directly from Coder host — edits are live instantly"
-        echo "- Debug log: \`tail -f /var/www/html/wp-content/debug.log\`"
-        echo ""
-        echo "## Git Workflow (per plugin)"
-        echo "\`\`\`bash"
-        for SLUG in "$${SLUGS[@]}"; do
-          echo "cd ~/workspace/$SLUG"
-          echo "git pull && git add . && git commit -m 'feat: ...' && git push"
-          echo ""
-        done
-        echo "\`\`\`"
-      } > "$CLAUDE_MD"
-      echo "✅ CLAUDE.md generated"
-    fi
+# ── Step 13: Start phpMyAdmin ─────────────────────────────────────────────────
+echo "🚀 Starting phpMyAdmin..."
+# NOTE: No indentation — heredoc must start at column 0
+cat > /opt/phpmyadmin/config.inc.php <<PMAEOF
+<?php
+\$cfg['Servers'][1]['host']      = getenv('WP_HOST') ?: 'localhost';
+\$cfg['Servers'][1]['user']      = 'wordpress';
+\$cfg['Servers'][1]['password']  = 'wordpress';
+\$cfg['Servers'][1]['auth_type'] = 'config';
+\$cfg['blowfish_secret']         = 'coder-dev-secret-change-me';
+PMAEOF
+php -S 0.0.0.0:8082 -t /opt/phpmyadmin/ >/tmp/phpmyadmin.log 2>&1 &
+echo "   PID $!"
 
-    # ── Start VS Code ─────────────────────────────────────────────────────────
-    echo "🚀 Starting VS Code..."
-    code-server \
-      --bind-addr 0.0.0.0:8081 \
-      --auth none \
-      --disable-telemetry \
-      "$WORKSPACE" &
-
-    # ── Start phpMyAdmin ──────────────────────────────────────────────────────
-    echo "🚀 Starting phpMyAdmin..."
-    cat > /opt/phpmyadmin/config.inc.php <<PMAEOF
-    <?php
-    \$cfg['Servers'][1]['host']      = getenv('WP_HOST') ?: 'localhost';
-    \$cfg['Servers'][1]['user']      = 'wordpress';
-    \$cfg['Servers'][1]['password']  = 'wordpress';
-    \$cfg['Servers'][1]['auth_type'] = 'config';
-    \$cfg['blowfish_secret']         = 'coder-dev-secret-change-me';
-    PMAEOF
-    php -S 0.0.0.0:8082 -t /opt/phpmyadmin/ &>/tmp/phpmyadmin.log &
-
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ✅ Workspace ready!"
-    echo ""
-    echo "  🌐 WordPress:  http://localhost:8080"
-    echo "  👤 WP Admin:   http://localhost:8080/wp-admin  (admin / admin)"
-    echo "  💻 VS Code:    http://localhost:8081"
-    echo "  🗄️  phpMyAdmin: http://localhost:8082"
-    echo ""
-    echo "  📂 Plugins (host-mounted, live editing):"
-    for SLUG in "$${SLUGS[@]}"; do
-      echo "     ~/workspace/$SLUG"
-    done
-    echo ""
-    echo "  🤖 Claude:  claude  (from any plugin dir)"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ✅ Startup complete!"
+echo ""
+echo "  🌐 WordPress:  http://localhost:8080"
+echo "  👤 WP Admin:   http://localhost:8080/wp-admin"
+echo "     user: admin  pass: admin"
+echo "  💻 VS Code:    http://localhost:8081"
+echo "  🗄️  phpMyAdmin: http://localhost:8082"
+echo ""
+if [ "$${#SLUGS[@]}" -gt 0 ]; then
+  echo "  📂 Plugins:"
+  for SLUG in "$${SLUGS[@]}"; do
+    echo "     ~/workspace/$SLUG"
+  done
+fi
+echo ""
+echo "  🤖 Claude Code: claude"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   EOT
 
   metadata {
