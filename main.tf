@@ -279,6 +279,7 @@ fi
 
 # Step 0b: Fix permissions on workspace volume (mounted as root)
 sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
+sudo chown -R coder:coder /home/coder/.claude 2>/dev/null || true
 
 # Step 1: Install jq FIRST before any JSON parsing
 if ! command -v jq &>/dev/null; then
