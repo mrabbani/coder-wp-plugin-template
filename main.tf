@@ -16,19 +16,6 @@ provider "docker" {}
 
 # ── Variables (secrets — set at template level) ──────────────────────────────
 
-variable "claude_code_oauth_token" {
-  type        = string
-  default     = ""
-  description = "System-level Claude Code OAuth token. User token takes priority if provided."
-}
-
-variable "anthropic_auth_token" {
-  type        = string
-  default     = ""
-  sensitive   = true
-  description = "Anthropic API key (sk-ant-...). Optional — OAuth token is preferred for Pro/Max subscriptions."
-}
-
 variable "git_token" {
   type        = string
   default     = ""
@@ -107,64 +94,10 @@ data "coder_parameter" "wp_version" {
   mutable      = true
 }
 
-data "coder_parameter" "claude_code" {
-  name         = "claude_code"
-  display_name = "Install Claude Code"
-  default      = "true"
-  mutable      = false
-  option {
-    name  = "Yes"
-    value = "true"
-  }
-  option {
-    name  = "No"
-    value = "false"
-  }
-}
-
-data "coder_parameter" "user_claude_code_oauth_token" {
-  name         = "user_claude_code_oauth_token"
-  display_name = "Claude Code OAuth Token (User)"
-  description  = "Your personal Claude Code OAuth token. Generate one using 'claude setup-token' command. If provided, this takes priority over system token. Enter '0' to disable Claude Code authentication."
-  type         = "string"
-  default      = ""
-  mutable      = true
-}
-
 # ── Workspace ────────────────────────────────────────────────────────────────
 
 data "coder_workspace"       "me" {}
 data "coder_workspace_owner" "me" {}
-
-# ── Claude Code (official Coder module) ──────────────────────────────────────
-
-module "claude_code" {
-  count               = data.coder_parameter.claude_code.value == "true" ? data.coder_workspace.me.start_count : 0
-  source              = "registry.coder.com/coder/claude-code/coder"
-  version             = "~> 4.7"
-  agent_id            = coder_agent.main.id
-  workdir             = "/home/coder/workspace"
-  install_claude_code = true
-  claude_code_version = "latest"
-  order               = 999
-  subdomain           = true
-
-  claude_code_oauth_token = (
-    data.coder_parameter.user_claude_code_oauth_token.value == "0" ?
-    "" :
-    (data.coder_parameter.user_claude_code_oauth_token.value != "" ? data.coder_parameter.user_claude_code_oauth_token.value : var.claude_code_oauth_token)
-  )
-  claude_api_key = var.anthropic_auth_token
-}
-
-# ── Auth token via coder_env (if API key provided) ──────────────────────────
-
-resource "coder_env" "anthropic_auth_token" {
-  count    = var.anthropic_auth_token != "" ? 1 : 0
-  agent_id = coder_agent.main.id
-  name     = "ANTHROPIC_AUTH_TOKEN"
-  value    = var.anthropic_auth_token
-}
 
 # ── Random secret for phpMyAdmin ─────────────────────────────────────────────
 
