@@ -2,7 +2,7 @@ terraform {
   required_providers {
     coder = {
       source  = "coder/coder"
-      version = ">= 2.0.0"
+      version = ">= 2.13.0"
     }
     docker = {
       source  = "kreuzwerker/docker"
@@ -136,28 +136,33 @@ data "coder_parameter" "user_claude_code_oauth_token" {
 data "coder_workspace"       "me" {}
 data "coder_workspace_owner" "me" {}
 
-# ── Claude Code auth via coder_env ───────────────────────────────────────────
+# ── Claude Code (official Coder module) ──────────────────────────────────────
 
-# OAuth token (Pro/Max subscription) — user token takes priority over system
-locals {
-  claude_oauth_token = (
+module "claude_code" {
+  count               = data.coder_parameter.claude_code.value == "true" ? data.coder_workspace.me.start_count : 0
+  source              = "registry.coder.com/coder/claude-code/coder"
+  version             = "~> 4.7"
+  agent_id            = coder_agent.main.id
+  workdir             = "/home/coder/workspace"
+  install_claude_code = true
+  claude_code_version = "latest"
+  order               = 999
+  subdomain           = true
+
+  claude_code_oauth_token = (
     data.coder_parameter.user_claude_code_oauth_token.value == "0" ?
     "" :
     (data.coder_parameter.user_claude_code_oauth_token.value != "" ? data.coder_parameter.user_claude_code_oauth_token.value : var.claude_code_oauth_token)
   )
+  claude_api_key = var.anthropic_auth_token
 }
 
-resource "coder_env" "claude_oauth_token" {
-  count    = local.claude_oauth_token != "" ? 1 : 0
+# ── Auth token via coder_env (if API key provided) ──────────────────────────
+
+resource "coder_env" "anthropic_auth_token" {
+  count    = var.anthropic_auth_token != "" ? 1 : 0
   agent_id = coder_agent.main.id
   name     = "ANTHROPIC_AUTH_TOKEN"
-  value    = local.claude_oauth_token
-}
-
-resource "coder_env" "claude_api_key" {
-  count    = local.claude_oauth_token == "" && var.anthropic_auth_token != "" ? 1 : 0
-  agent_id = coder_agent.main.id
-  name     = "ANTHROPIC_API_KEY"
   value    = var.anthropic_auth_token
 }
 
