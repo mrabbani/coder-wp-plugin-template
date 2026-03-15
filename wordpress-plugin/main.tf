@@ -100,6 +100,20 @@ resource "coder_agent" "main" {
       touch ~/.init_done
     fi
 
+    # Force IPv4 resolution for Docker containers (Docker DNS returns IPv6)
+    for HOST in wordpress phpmyadmin mysql; do
+      for attempt in $(seq 1 30); do
+        IPV4=$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR==1{print $1}')
+        if [ -n "$IPV4" ]; then
+          sudo sed -i "/[[:space:]]$HOST$/d" /etc/hosts 2>/dev/null || true
+          echo "$IPV4 $HOST" | sudo tee -a /etc/hosts >/dev/null
+          echo "Resolved $HOST -> $IPV4"
+          break
+        fi
+        sleep 2
+      done
+    done
+
     # Print connection info to the workspace log
     echo "============================================"
     echo " WordPress  → via Coder dashboard"
