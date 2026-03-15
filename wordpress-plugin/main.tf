@@ -94,6 +94,17 @@ resource "coder_agent" "main" {
   startup_script = <<-EOT
     # NO set -e — script must survive errors or agent disconnects
 
+    # Fix git credential issues with Coder agent
+    unset GIT_ASKPASS
+    unset SSH_ASKPASS
+    unset CODER_AGENT_TOKEN
+    git config --global credential.helper 'cache --timeout=360000'
+
+    # Install nvm for the coder user
+    if [ ! -d "/home/coder/.nvm" ]; then
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    fi
+
     # First-run skeleton copy
     if [ ! -f ~/.init_done ]; then
       cp -rT /etc/skel ~ 2>/dev/null || true
