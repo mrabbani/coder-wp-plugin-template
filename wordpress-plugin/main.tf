@@ -94,11 +94,19 @@ resource "coder_agent" "main" {
   startup_script = <<-EOT
     # NO set -e — script must survive errors or agent disconnects
 
-    # Fix git credential issues with Coder agent
-    unset GIT_ASKPASS
-    unset SSH_ASKPASS
-    unset CODER_AGENT_TOKEN
+    # Fix git credential issues with Coder agent — persist into all shells
     git config --global credential.helper 'cache --timeout=360000'
+    for rc in /home/coder/.bashrc /home/coder/.zshrc; do
+      if ! grep -q 'unset GIT_ASKPASS' "$rc" 2>/dev/null; then
+        cat >> "$rc" <<'RCEOF'
+
+# Prevent Coder agent from hijacking git credentials
+unset GIT_ASKPASS
+unset SSH_ASKPASS
+unset CODER_AGENT_TOKEN
+RCEOF
+      fi
+    done
 
     # Install nvm for the coder user
     if [ ! -d "/home/coder/.nvm" ]; then
