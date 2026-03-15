@@ -254,6 +254,16 @@ module "code-server" {
   order    = 1
 }
 
+# Claude Code web UI — CLI installed by startup script
+module "claude-code" {
+  count               = data.coder_workspace.me.start_count
+  source              = "registry.coder.com/coder/claude-code/coder"
+  version             = "~> 1.0"
+  agent_id            = coder_agent.main.id
+  order               = 99
+  install_claude_code = false
+}
+
 
 # ── Docker Network ─────────────────────────────────────────────────────────────
 
