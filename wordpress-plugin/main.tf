@@ -308,15 +308,15 @@ resource "coder_script" "claude_code_ui_install" {
     echo "Claude Code UI installation completed!"
 
     export PATH="$${HOME}/.local/bin:$${PATH}"
-    cat > .env << EOF
-    PORT=$${PORT}
-    VITE_PORT=5173
-    NODE_ENV=production
-    VITE_IS_PLATFORM=true
-    VITE_CONTEXT_WINDOW=160000
-    CONTEXT_WINDOW=160000
-    DATABASE_PATH=$${HOME}/.claude-code-ui.db
-    EOF
+    printf '%s\n' \
+      "PORT=$${PORT}" \
+      "VITE_PORT=5173" \
+      "NODE_ENV=production" \
+      "VITE_IS_PLATFORM=true" \
+      "VITE_CONTEXT_WINDOW=160000" \
+      "CONTEXT_WINDOW=160000" \
+      "DATABASE_PATH=$${HOME}/.claude-code-ui.db" \
+      > .env
 
     export DATABASE_PATH=$${HOME}/.claude-code-ui.db
     nohup npm start > "$${HOME}/.claude-code-ui.log" 2>&1 &
