@@ -224,7 +224,7 @@ resource "docker_container" "dev" {
     container_path = "/var/run/docker.sock"
   }
 
-  command = ["/bin/bash", "-c", coder_agent.main.init_script]
+  command = ["/bin/bash", "-c", "sudo chown coder:coder /home/coder && sudo chown -R coder:coder /home/coder/.claude 2>/dev/null; ${coder_agent.main.init_script}"]
 }
 
 # ── Coder agent ───────────────────────────────────────────────────────────────
