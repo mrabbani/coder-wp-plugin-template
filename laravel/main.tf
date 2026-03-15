@@ -113,6 +113,13 @@ resource "docker_network" "laravel_network" {
 
 # ── Volumes ──────────────────────────────────────────────────────────────────
 
+resource "docker_volume" "home_volume" {
+  name = "coder-${data.coder_workspace.me.id}-home"
+  lifecycle {
+    ignore_changes = all
+  }
+}
+
 resource "docker_volume" "claude_config" {
   name = "claude-config-${data.coder_workspace.me.id}"
 }
@@ -186,10 +193,11 @@ resource "docker_image" "dev" {
 }
 
 resource "docker_container" "dev" {
-  count   = data.coder_workspace.me.start_count
-  image   = docker_image.dev.image_id
-  name    = "dev-${data.coder_workspace.me.id}"
-  restart = "unless-stopped"
+  count    = data.coder_workspace.me.start_count
+  image    = docker_image.dev.image_id
+  name     = "dev-${data.coder_workspace.me.id}"
+  hostname = data.coder_workspace.me.name
+  restart  = "unless-stopped"
 
   networks_advanced {
     name = docker_network.laravel_network.name
@@ -205,6 +213,18 @@ resource "docker_container" "dev" {
     "REPO_BRANCH=${data.coder_parameter.repo_branch.value}",
     "BLOWFISH_SECRET=${random_string.blowfish_secret.result}",
   ]
+
+  host {
+    host = "host.docker.internal"
+    ip   = "host-gateway"
+  }
+
+  # Persist entire home directory so Mutagen/Coder Desktop can install agents
+  volumes {
+    volume_name    = docker_volume.home_volume.name
+    container_path = "/home/coder"
+    read_only      = false
+  }
 
   # Mount project from host path
   volumes {
@@ -224,7 +244,7 @@ resource "docker_container" "dev" {
     container_path = "/var/run/docker.sock"
   }
 
-  command = ["/bin/bash", "-c", "sudo chown coder:coder /home/coder && sudo chown -R coder:coder /home/coder/.claude 2>/dev/null; ${coder_agent.main.init_script}"]
+  entrypoint = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
 }
 
 # ── Coder agent ───────────────────────────────────────────────────────────────
@@ -241,12 +261,17 @@ set -uo pipefail
 
 WORKSPACE="/home/coder/workspace"
 
+# Prepare user home with default files on first start
+if [ ! -f ~/.init_done ]; then
+  cp -rT /etc/skel ~ 2>/dev/null || true
+  touch ~/.init_done
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Laravel Dev Workspace"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Step 0: Fix permissions on home + workspace volumes (mounted as root)
-sudo chown coder:coder /home/coder 2>/dev/null || true
+# Step 0: Fix permissions on mounted volumes
 sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
 sudo chown -R coder:coder /home/coder/.claude 2>/dev/null || true
 

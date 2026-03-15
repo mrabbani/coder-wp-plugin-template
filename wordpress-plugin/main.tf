@@ -116,6 +116,13 @@ resource "docker_network" "wp_network" {
 
 # ── MySQL ─────────────────────────────────────────────────────────────────────
 
+resource "docker_volume" "home_volume" {
+  name = "coder-${data.coder_workspace.me.id}-home"
+  lifecycle {
+    ignore_changes = all
+  }
+}
+
 resource "docker_volume" "claude_config" {
   name = "claude-config-${data.coder_workspace.me.id}"
 }
@@ -201,10 +208,11 @@ resource "docker_image" "dev" {
 }
 
 resource "docker_container" "dev" {
-  count   = data.coder_workspace.me.start_count
-  image   = docker_image.dev.image_id
-  name    = "dev-${data.coder_workspace.me.id}"
-  restart = "unless-stopped"
+  count    = data.coder_workspace.me.start_count
+  image    = docker_image.dev.image_id
+  name     = "dev-${data.coder_workspace.me.id}"
+  hostname = data.coder_workspace.me.name
+  restart  = "unless-stopped"
 
   networks_advanced {
     name = docker_network.wp_network.name
@@ -219,6 +227,18 @@ resource "docker_container" "dev" {
     "GIT_TOKEN=${var.git_token}",
     "BLOWFISH_SECRET=${random_string.blowfish_secret.result}",
   ]
+
+  host {
+    host = "host.docker.internal"
+    ip   = "host-gateway"
+  }
+
+  # Persist entire home directory so Mutagen/Coder Desktop can install agents
+  volumes {
+    volume_name    = docker_volume.home_volume.name
+    container_path = "/home/coder"
+    read_only      = false
+  }
 
   volumes {
     host_path      = data.coder_parameter.plugins_base_path.value
@@ -237,7 +257,7 @@ resource "docker_container" "dev" {
     container_path = "/var/run/docker.sock"
   }
 
-  command = ["/bin/bash", "-c", "sudo chown coder:coder /home/coder && sudo chown -R coder:coder /home/coder/.claude 2>/dev/null; ${coder_agent.main.init_script}"]
+  entrypoint = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
 }
 
 # ── Coder agent ───────────────────────────────────────────────────────────────
@@ -253,6 +273,12 @@ resource "coder_agent" "main" {
 set -uo pipefail
 
 WORKSPACE="/home/coder/workspace"
+
+# Prepare user home with default files on first start
+if [ ! -f ~/.init_done ]; then
+  cp -rT /etc/skel ~ 2>/dev/null || true
+  touch ~/.init_done
+fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  WordPress Multi-Plugin Dev Workspace"
@@ -277,8 +303,7 @@ if [ "$WP_CONTAINER" != "localhost" ]; then
   done
 fi
 
-# Step 0b: Fix permissions on home + workspace volumes (mounted as root)
-sudo chown coder:coder /home/coder 2>/dev/null || true
+# Step 0b: Fix permissions on mounted volumes
 sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
 sudo chown -R coder:coder /home/coder/.claude 2>/dev/null || true
 
