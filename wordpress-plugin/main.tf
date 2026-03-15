@@ -256,8 +256,7 @@ module "claude-code" {
   source              = "registry.coder.com/coder/claude-code/coder"
   version             = "~> 1.0"
   agent_id            = coder_agent.main.id
-  install_claude_code = true
-  claude_code_version = "latest"
+  install_claude_code = false
   order               = 99
 }
 
