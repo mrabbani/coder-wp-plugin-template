@@ -263,12 +263,77 @@ module "claude-code" {
 
 # ── Claude Code UI (web interface) ───────────────────────────────────────────
 
-module "claude-code-ui" {
-  count    = data.coder_workspace.me.start_count
-  source   = "./modules/claude-code-ui"
-  agent_id = coder_agent.main.id
-  port     = 13376
-  share    = "owner"
+resource "coder_script" "claude_code_ui_install" {
+  agent_id     = coder_agent.main.id
+  display_name = "Install Claude Code UI"
+  icon         = "/emojis/1f4ac.png"
+  run_on_start = true
+  start_blocks_login = false
+  script = <<-EOT
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    INSTALL_PATH="$${HOME}/.claude-code-ui"
+    PORT=13376
+    INIT_DB="${file("${path.module}/init.db.txt")}"
+
+    echo "Installing Claude Code UI..."
+
+    if ! command -v node > /dev/null; then
+      echo "Node.js is not installed!"; exit 1
+    fi
+    if ! command -v npm > /dev/null; then
+      echo "npm is not installed!"; exit 1
+    fi
+
+    mkdir -p "$${INSTALL_PATH}"
+
+    if [ -d "$${INSTALL_PATH}/claudecodeui" ]; then
+      cd "$${INSTALL_PATH}/claudecodeui"
+      git pull origin main || echo "Failed to pull latest changes, continuing with existing version"
+    else
+      cd "$${INSTALL_PATH}"
+      git clone --depth 1 -b main https://github.com/siteboon/claudecodeui.git
+      cd claudecodeui
+    fi
+
+    if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules" ]; then
+      npm install
+    fi
+
+    if [ ! -f "$${HOME}/.claude-code-ui.db" ]; then
+      echo "$${INIT_DB}" | base64 -d > "$${HOME}/.claude-code-ui.db"
+    fi
+
+    echo "Claude Code UI installation completed!"
+
+    export PATH="$${HOME}/.local/bin:$${PATH}"
+    cat > .env << EOF
+    PORT=$${PORT}
+    VITE_PORT=5173
+    NODE_ENV=production
+    VITE_IS_PLATFORM=true
+    VITE_CONTEXT_WINDOW=160000
+    CONTEXT_WINDOW=160000
+    DATABASE_PATH=$${HOME}/.claude-code-ui.db
+    EOF
+
+    export DATABASE_PATH=$${HOME}/.claude-code-ui.db
+    nohup npm start > "$${HOME}/.claude-code-ui.log" 2>&1 &
+    echo $! > "$${HOME}/.claude-code-ui.pid"
+    echo "Claude Code UI started on port $${PORT}"
+  EOT
+}
+
+resource "coder_app" "claude_code_ui" {
+  agent_id     = coder_agent.main.id
+  slug         = "ccui"
+  display_name = "Claude Code UI"
+  icon         = "/emojis/1f4ac.png"
+  url          = "http://localhost:13376"
+  share        = "owner"
+  subdomain    = true
+  open_in      = "tab"
 }
 
 
