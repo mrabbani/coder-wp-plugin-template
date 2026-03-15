@@ -249,6 +249,16 @@ module "code-server" {
   order    = 1
 }
 
+# ── Claude Code ───────────────────────────────────────────────────────────────
+
+module "claude-code" {
+  count    = data.coder_workspace.me.start_count
+  source   = "registry.coder.com/coder/claude-code/coder"
+  version  = "~> 1.0"
+  agent_id = coder_agent.main.id
+  order    = 2
+}
+
 # ── Docker Network ─────────────────────────────────────────────────────────────
 
 resource "docker_network" "wp_network" {
