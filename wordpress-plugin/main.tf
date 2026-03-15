@@ -100,14 +100,21 @@ resource "coder_agent" "main" {
       touch ~/.init_done
     fi
 
-    # Force IPv4 resolution for Docker containers (Docker DNS returns IPv6)
-    for HOST in wordpress phpmyadmin mysql; do
+    # Install socat for IPv4 proxying
+    if ! command -v socat &>/dev/null; then
+      sudo apt-get update -qq && sudo apt-get install -y socat -qq 2>/dev/null || true
+    fi
+
+    # Start IPv4 proxies (Docker DNS returns IPv6 but containers listen on IPv4)
+    for entry in "wordpress:80:8080" "phpmyadmin:80:8081"; do
+      CONTAINER=$(echo "$entry" | cut -d: -f1)
+      CPORT=$(echo "$entry" | cut -d: -f2)
+      LPORT=$(echo "$entry" | cut -d: -f3)
       for attempt in $(seq 1 30); do
-        IPV4=$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR==1{print $1}')
+        IPV4=$(getent ahostsv4 "$CONTAINER" 2>/dev/null | awk 'NR==1{print $1}')
         if [ -n "$IPV4" ]; then
-          sudo sed -i "/[[:space:]]$HOST$/d" /etc/hosts 2>/dev/null || true
-          echo "$IPV4 $HOST" | sudo tee -a /etc/hosts >/dev/null
-          echo "Resolved $HOST -> $IPV4"
+          echo "Proxy: 127.0.0.1:$LPORT -> $IPV4:$CPORT ($CONTAINER)"
+          socat TCP-LISTEN:$LPORT,bind=127.0.0.1,fork,reuseaddr TCP4:$IPV4:$CPORT >/dev/null 2>&1 &
           break
         fi
         sleep 2
@@ -167,7 +174,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "WordPress Status"
     key          = "4_wp_status"
-    script       = "curl -sf -o /dev/null -w 'HTTP %%{http_code}' http://wordpress:80 || echo 'unreachable'"
+    script       = "curl -sf -o /dev/null -w 'HTTP %%{http_code}' http://127.0.0.1:8080 || echo 'unreachable'"
     interval     = 30
     timeout      = 5
   }
@@ -203,13 +210,13 @@ resource "coder_app" "wordpress" {
   agent_id     = coder_agent.main.id
   slug         = "wordpress"
   display_name = "WordPress"
-  url          = "http://wordpress:80"
+  url          = "http://127.0.0.1:8080"
   icon         = "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/WordPress_blue_logo.svg/1200px-WordPress_blue_logo.svg.png"
   subdomain    = true
   share        = "owner"
 
   healthcheck {
-    url       = "http://wordpress:80"
+    url       = "http://127.0.0.1:8080"
     interval  = 15
     threshold = 6
   }
@@ -219,13 +226,13 @@ resource "coder_app" "phpmyadmin" {
   agent_id     = coder_agent.main.id
   slug         = "phpmyadmin"
   display_name = "phpMyAdmin"
-  url          = "http://phpmyadmin:80"
+  url          = "http://127.0.0.1:8081"
   icon         = "https://www.phpmyadmin.net/static/favicon.ico"
   subdomain    = true
   share        = "owner"
 
   healthcheck {
-    url       = "http://phpmyadmin:80"
+    url       = "http://127.0.0.1:8081"
     interval  = 15
     threshold = 6
   }
