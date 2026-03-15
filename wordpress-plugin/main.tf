@@ -121,8 +121,14 @@ resource "coder_agent" "main" {
       done
     done
 
-    # Make wp-content writable so coder user can sync plugins/themes
-    chmod -R 777 /home/coder/wordpress/wp-content 2>/dev/null || true
+    # Make WordPress files writable by coder user
+    # Wait for WordPress container to finish populating files
+    for i in $(seq 1 30); do
+      [ -f /home/coder/wordpress/wp-config.php ] && break
+      sleep 2
+    done
+    sudo chown -R coder:coder /home/coder/wordpress 2>/dev/null || true
+    sudo chmod -R 777 /home/coder/wordpress 2>/dev/null || true
 
     # Print connection info to the workspace log
     echo "============================================"
