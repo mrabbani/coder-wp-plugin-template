@@ -20,18 +20,6 @@ variable "docker_socket" {
   type        = string
 }
 
-variable "wordpress_port" {
-  default     = 8080
-  description = "Host port for WordPress"
-  type        = number
-}
-
-variable "phpmyadmin_port" {
-  default     = 8081
-  description = "Host port for phpMyAdmin"
-  type        = number
-}
-
 variable "mysql_root_password" {
   default     = ""
   description = "MySQL root password (leave blank to auto-generate)"
@@ -372,11 +360,6 @@ resource "docker_container" "wordpress" {
     "WORDPRESS_TABLE_PREFIX=wp_",
   ]
 
-  ports {
-    internal = 80
-    external = var.wordpress_port
-  }
-
   networks_advanced {
     name    = docker_network.wp_network.name
     aliases = ["wordpress"]
@@ -430,11 +413,6 @@ resource "docker_container" "phpmyadmin" {
     "UPLOAD_LIMIT=256M",
     "MAX_EXECUTION_TIME=600",
   ]
-
-  ports {
-    internal = 80
-    external = var.phpmyadmin_port
-  }
 
   networks_advanced {
     name    = docker_network.wp_network.name
@@ -516,16 +494,6 @@ resource "docker_container" "workspace" {
 }
 
 # ── Outputs ────────────────────────────────────────────────────────────────────
-
-output "wordpress_url" {
-  value       = "http://localhost:${var.wordpress_port}"
-  description = "WordPress site URL"
-}
-
-output "phpmyadmin_url" {
-  value       = "http://localhost:${var.phpmyadmin_port}"
-  description = "phpMyAdmin URL"
-}
 
 output "mysql_root_password" {
   value       = local.mysql_root_pass
