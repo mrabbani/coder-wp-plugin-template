@@ -114,8 +114,8 @@ resource "coder_agent" "main" {
 
     # Print connection info to the workspace log
     echo "============================================"
-    echo " WordPress  → http://localhost:${var.wordpress_port}"
-    echo " phpMyAdmin → http://localhost:${var.phpmyadmin_port}"
+    echo " WordPress  → via Coder dashboard"
+    echo " phpMyAdmin → via Coder dashboard"
     echo " DB name    : ${var.wordpress_db_name}"
     echo " DB user    : ${var.wordpress_db_user}"
     echo " DB pass    : ${local.wp_db_pass}"
@@ -201,14 +201,14 @@ resource "coder_app" "wordpress" {
   agent_id     = coder_agent.main.id
   slug         = "wordpress"
   display_name = "WordPress"
-  url          = "http://localhost:${var.wordpress_port}"
+  url          = "http://wordpress:80"
   icon         = "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/WordPress_blue_logo.svg/1200px-WordPress_blue_logo.svg.png"
-  subdomain    = false
+  subdomain    = true
   share        = "owner"
 
   healthcheck {
-    url      = "http://localhost:${var.wordpress_port}"
-    interval = 15
+    url       = "http://wordpress:80"
+    interval  = 15
     threshold = 6
   }
 }
@@ -217,14 +217,14 @@ resource "coder_app" "phpmyadmin" {
   agent_id     = coder_agent.main.id
   slug         = "phpmyadmin"
   display_name = "phpMyAdmin"
-  url          = "http://localhost:${var.phpmyadmin_port}"
+  url          = "http://phpmyadmin:80"
   icon         = "https://www.phpmyadmin.net/static/favicon.ico"
-  subdomain    = false
+  subdomain    = true
   share        = "owner"
 
   healthcheck {
-    url      = "http://localhost:${var.phpmyadmin_port}"
-    interval = 15
+    url       = "http://phpmyadmin:80"
+    interval  = 15
     threshold = 6
   }
 }
