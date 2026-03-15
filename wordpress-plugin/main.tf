@@ -285,8 +285,10 @@ resource "coder_script" "claude_code_ui_install" {
       echo "npm is not installed!"; exit 1
     fi
 
+    # Ensure home dir is owned by coder (fresh volume may be root-owned)
+    sudo chown -R coder:coder "$${HOME}" 2>/dev/null || true
+
     mkdir -p "$${INSTALL_PATH}"
-    chown -R coder:coder "$${INSTALL_PATH}" 2>/dev/null || true
 
     if [ -d "$${INSTALL_PATH}/claudecodeui" ]; then
       cd "$${INSTALL_PATH}/claudecodeui"
@@ -298,10 +300,12 @@ resource "coder_script" "claude_code_ui_install" {
     fi
 
     if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules" ]; then
-      npm install --no-optional 2>&1 || sudo npm install --no-optional --unsafe-perm 2>&1
+      echo "Installing Claude Code UI dependencies..."
+      npm install 2>&1
     fi
 
     if [ ! -f "$${HOME}/.claude-code-ui.db" ]; then
+      echo "Creating DB file..."
       echo "$${INIT_DB}" | base64 -d > "$${HOME}/.claude-code-ui.db"
     fi
 
@@ -320,8 +324,18 @@ resource "coder_script" "claude_code_ui_install" {
 
     export DATABASE_PATH=$${HOME}/.claude-code-ui.db
     nohup npm start > "$${HOME}/.claude-code-ui.log" 2>&1 &
-    echo $! > "$${HOME}/.claude-code-ui.pid"
-    echo "Claude Code UI started on port $${PORT}"
+    CCUI_PID=$!
+    echo $${CCUI_PID} > "$${HOME}/.claude-code-ui.pid"
+    echo "Claude Code UI started with PID $${CCUI_PID} on port $${PORT}"
+
+    # Wait briefly and check if it's actually running
+    sleep 3
+    if kill -0 $${CCUI_PID} 2>/dev/null; then
+      echo "Claude Code UI is running"
+    else
+      echo "ERROR: Claude Code UI failed to start. Log output:"
+      cat "$${HOME}/.claude-code-ui.log" 2>/dev/null || true
+    fi
   EOT
 }
 
