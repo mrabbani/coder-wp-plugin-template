@@ -92,11 +92,11 @@ resource "coder_agent" "main" {
   os   = "linux"
 
   startup_script = <<-EOT
-    set -e
+    # NO set -e — script must survive errors or agent disconnects
 
     # First-run skeleton copy
     if [ ! -f ~/.init_done ]; then
-      cp -rT /etc/skel ~
+      cp -rT /etc/skel ~ 2>/dev/null || true
       touch ~/.init_done
     fi
 
@@ -116,7 +116,7 @@ resource "coder_agent" "main" {
       CPORT=$(echo "$entry" | cut -d: -f2)
       LPORT=$(echo "$entry" | cut -d: -f3)
       for attempt in $(seq 1 30); do
-        IPV4=$(getent ahostsv4 "$CONTAINER" 2>/dev/null | awk 'NR==1{print $1}')
+        IPV4=$(getent ahostsv4 "$CONTAINER" 2>/dev/null | awk 'NR==1{print $1}' || true)
         if [ -n "$IPV4" ]; then
           echo "Proxy: 127.0.0.1:$LPORT -> $IPV4:$CPORT ($CONTAINER)"
           socat TCP-LISTEN:$LPORT,bind=127.0.0.1,fork,reuseaddr TCP4:$IPV4:$CPORT >/dev/null 2>&1 &
