@@ -271,7 +271,7 @@ resource "coder_script" "claude_code_ui_install" {
   start_blocks_login = false
   script = <<-EOT
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -uo pipefail
 
     INSTALL_PATH="$${HOME}/.claude-code-ui"
     PORT=13376
@@ -287,6 +287,7 @@ resource "coder_script" "claude_code_ui_install" {
     fi
 
     mkdir -p "$${INSTALL_PATH}"
+    chown -R coder:coder "$${INSTALL_PATH}" 2>/dev/null || true
 
     if [ -d "$${INSTALL_PATH}/claudecodeui" ]; then
       cd "$${INSTALL_PATH}/claudecodeui"
@@ -298,7 +299,7 @@ resource "coder_script" "claude_code_ui_install" {
     fi
 
     if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules" ]; then
-      npm install
+      npm install --no-optional 2>&1 || sudo npm install --no-optional --unsafe-perm 2>&1
     fi
 
     if [ ! -f "$${HOME}/.claude-code-ui.db" ]; then
