@@ -165,7 +165,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "WordPress Status"
     key          = "4_wp_status"
-    script       = "curl -sf -o /dev/null -w 'HTTP %{http_code}' http://wordpress:80 || echo 'unreachable'"
+    script       = "curl -sf -o /dev/null -w 'HTTP %%{http_code}' http://wordpress:80 || echo 'unreachable'"
     interval     = 30
     timeout      = 5
   }
