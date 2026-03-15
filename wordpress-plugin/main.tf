@@ -261,6 +261,16 @@ module "claude-code" {
   order               = 99
 }
 
+# ── Claude Code UI (web interface) ───────────────────────────────────────────
+
+module "claude-code-ui" {
+  count    = data.coder_workspace.me.start_count
+  source   = "./modules/claude-code-ui"
+  agent_id = coder_agent.main.id
+  port     = 13376
+  share    = "owner"
+}
+
 
 # ── Docker Network ─────────────────────────────────────────────────────────────
 
