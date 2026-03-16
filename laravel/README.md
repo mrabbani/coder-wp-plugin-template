@@ -64,15 +64,14 @@ coder open my-laravel
 |---|---|---|
 | `repo_url` | HTTPS URL of the Laravel project repo | (empty) |
 | `repo_branch` | Branch to clone | `main` |
-| `project_base_path` | Host path for project storage | `/home/ubuntu/laravel-projects` |
-| `agent_arch` | CPU architecture (amd64 / arm64) | amd64 |
-| `php_version` | PHP version (8.1 / 8.2 / 8.3) | 8.2 |
 
-## Template Variables (Secrets)
+## Template Variables (set when pushing template)
 
-| Variable | Description | Required |
+| Variable | Description | Default |
 |---|---|---|
-| `git_token` | Git PAT for cloning private repos | No |
+| `git_token` | Git PAT for cloning private repos | (empty) |
+| `php_version` | PHP version | `8.2` |
+| `project_base_path` | Host path for project storage | `/home/ubuntu/laravel-projects` |
 
 ---
 

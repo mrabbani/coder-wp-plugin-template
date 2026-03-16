@@ -61,16 +61,15 @@ coder open my-flutter
 |---|---|---|
 | `repo_url` | HTTPS URL of the Flutter project repo | (empty) |
 | `repo_branch` | Branch to clone | `main` |
-| `project_base_path` | Host path for project storage | `/home/ubuntu/flutter-projects` |
-| `agent_arch` | CPU architecture (amd64 / arm64) | amd64 |
-| `flutter_channel` | Flutter channel (stable / beta / dev) | stable |
-| `java_version` | JDK version (17 / 21) | 17 |
 
-## Template Variables (Secrets)
+## Template Variables (set when pushing template)
 
-| Variable | Description | Required |
+| Variable | Description | Default |
 |---|---|---|
-| `git_token` | Git PAT for cloning private repos | No |
+| `git_token` | Git PAT for cloning private repos | (empty) |
+| `flutter_channel` | Flutter channel | `stable` |
+| `java_version` | JDK version | `17` |
+| `project_base_path` | Host path for project storage | `/home/ubuntu/flutter-projects` |
 
 ---
 

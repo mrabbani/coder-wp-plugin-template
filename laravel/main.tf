@@ -1,20 +1,24 @@
 terraform {
   required_providers {
     coder = {
-      source  = "coder/coder"
-      version = ">= 2.13.0"
+      source = "coder/coder"
     }
     docker = {
-      source  = "kreuzwerker/docker"
-      version = "~> 3.0"
+      source = "kreuzwerker/docker"
+    }
+    random = {
+      source = "hashicorp/random"
     }
   }
 }
 
-provider "coder" {}
-provider "docker" {}
+# ── Variables ──────────────────────────────────────────────────────────────────
 
-# ── Variables (secrets — set at template level) ──────────────────────────────
+variable "docker_socket" {
+  default     = ""
+  description = "(Optional) Docker socket URI"
+  type        = string
+}
 
 variable "git_token" {
   type        = string
@@ -23,7 +27,19 @@ variable "git_token" {
   description = "Git personal access token for cloning private repos"
 }
 
-# ── Parameters ───────────────────────────────────────────────────────────────
+variable "php_version" {
+  type        = string
+  default     = "8.2"
+  description = "PHP version (8.1, 8.2, 8.3)"
+}
+
+variable "project_base_path" {
+  type        = string
+  default     = "/home/ubuntu/laravel-projects"
+  description = "Host path where the Laravel project is stored"
+}
+
+# ── Parameters (user-facing at workspace creation) ───────────────────────────
 
 data "coder_parameter" "repo_url" {
   name         = "repo_url"
@@ -41,50 +57,18 @@ data "coder_parameter" "repo_branch" {
   mutable      = true
 }
 
-data "coder_parameter" "project_base_path" {
-  name         = "project_base_path"
-  display_name = "Project Base Path (Host)"
-  description  = "Absolute path on Coder server where the Laravel project is stored"
-  default      = "/home/ubuntu/laravel-projects"
-  mutable      = true
+# ── Locals & Data Sources ────────────────────────────────────────────────────
+
+locals {
+  username       = data.coder_workspace_owner.me.name
+  workspace_name = data.coder_workspace.me.name
 }
 
-data "coder_parameter" "agent_arch" {
-  name         = "agent_arch"
-  display_name = "Agent Architecture"
-  default      = "amd64"
-  mutable      = false
-  option {
-    name  = "amd64 (Intel/AMD)"
-    value = "amd64"
-  }
-  option {
-    name  = "arm64 (Graviton)"
-    value = "arm64"
-  }
+provider "docker" {
+  host = var.docker_socket != "" ? var.docker_socket : null
 }
 
-data "coder_parameter" "php_version" {
-  name         = "php_version"
-  display_name = "PHP Version"
-  default      = "8.2"
-  mutable      = false
-  option {
-    name  = "PHP 8.1"
-    value = "8.1"
-  }
-  option {
-    name  = "PHP 8.2"
-    value = "8.2"
-  }
-  option {
-    name  = "PHP 8.3"
-    value = "8.3"
-  }
-}
-
-# ── Workspace ────────────────────────────────────────────────────────────────
-
+data "coder_provisioner"     "me" {}
 data "coder_workspace"       "me" {}
 data "coder_workspace_owner" "me" {}
 
@@ -98,7 +82,7 @@ resource "random_string" "blowfish_secret" {
 # ── Docker network ────────────────────────────────────────────────────────────
 
 resource "docker_network" "laravel_network" {
-  name     = "laravel-${data.coder_workspace.me.id}"
+  name     = "coder-${data.coder_workspace.me.id}-laravel"
   ipv6     = false
   internal = false
 }
@@ -107,13 +91,7 @@ resource "docker_network" "laravel_network" {
 
 resource "docker_volume" "home_volume" {
   name = "coder-${data.coder_workspace.me.id}-home"
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-resource "docker_volume" "claude_config" {
-  name = "claude-config-${data.coder_workspace.me.id}"
+  lifecycle { ignore_changes = all }
 }
 
 resource "docker_volume" "mysql_data" {
@@ -129,11 +107,12 @@ resource "docker_volume" "redis_data" {
 resource "docker_container" "mysql" {
   count   = data.coder_workspace.me.start_count
   image   = "mysql:8.0"
-  name    = "mysql-${data.coder_workspace.me.id}"
+  name    = "coder-${local.username}-${lower(local.workspace_name)}-mysql"
   restart = "unless-stopped"
 
   networks_advanced {
-    name = docker_network.laravel_network.name
+    name    = docker_network.laravel_network.name
+    aliases = ["mysql"]
   }
 
   env = [
@@ -147,6 +126,14 @@ resource "docker_container" "mysql" {
     volume_name    = docker_volume.mysql_data.name
     container_path = "/var/lib/mysql"
   }
+
+  healthcheck {
+    test         = ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-plaravel"]
+    interval     = "10s"
+    timeout      = "5s"
+    retries      = 5
+    start_period = "30s"
+  }
 }
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
@@ -154,11 +141,12 @@ resource "docker_container" "mysql" {
 resource "docker_container" "redis" {
   count   = data.coder_workspace.me.start_count
   image   = "redis:7-alpine"
-  name    = "redis-${data.coder_workspace.me.id}"
+  name    = "coder-${local.username}-${lower(local.workspace_name)}-redis"
   restart = "unless-stopped"
 
   networks_advanced {
-    name = docker_network.laravel_network.name
+    name    = docker_network.laravel_network.name
+    aliases = ["redis"]
   }
 
   volumes {
@@ -167,7 +155,7 @@ resource "docker_container" "redis" {
   }
 }
 
-# ── Dev container ─────────────────────────────────────────────────────────────
+# ── Dev image ────────────────────────────────────────────────────────────────
 
 resource "docker_image" "dev" {
   name = "laravel-dev-${data.coder_workspace.me.id}"
@@ -175,19 +163,21 @@ resource "docker_image" "dev" {
     context    = path.module
     dockerfile = "Dockerfile.dev"
     build_args = {
-      PHP_VERSION = data.coder_parameter.php_version.value
+      PHP_VERSION = var.php_version
     }
   }
   triggers = {
     dockerfile  = filemd5("${path.module}/Dockerfile.dev")
-    php_version = data.coder_parameter.php_version.value
+    php_version = var.php_version
   }
 }
+
+# ── Dev container ─────────────────────────────────────────────────────────────
 
 resource "docker_container" "dev" {
   count    = data.coder_workspace.me.start_count
   image    = docker_image.dev.image_id
-  name     = "dev-${data.coder_workspace.me.id}"
+  name     = "coder-${local.username}-${lower(local.workspace_name)}"
   hostname = data.coder_workspace.me.name
   restart  = "unless-stopped"
 
@@ -197,8 +187,8 @@ resource "docker_container" "dev" {
 
   env = [
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
-    "MYSQL_HOST=mysql-${data.coder_workspace.me.id}",
-    "REDIS_HOST=redis-${data.coder_workspace.me.id}",
+    "MYSQL_HOST=mysql",
+    "REDIS_HOST=redis",
     "GIT_TOKEN=${var.git_token}",
     "REPO_URL=${data.coder_parameter.repo_url.value}",
     "REPO_BRANCH=${data.coder_parameter.repo_branch.value}",
@@ -210,217 +200,143 @@ resource "docker_container" "dev" {
     ip   = "host-gateway"
   }
 
-  # Persist entire home directory so Mutagen/Coder Desktop can install agents
   volumes {
     volume_name    = docker_volume.home_volume.name
     container_path = "/home/coder"
     read_only      = false
   }
 
-  # Mount project from host path
   volumes {
-    host_path      = data.coder_parameter.project_base_path.value
+    host_path      = var.project_base_path
     container_path = "/home/coder/workspace"
   }
 
-  # Claude Code config — persist login across restarts
-  volumes {
-    volume_name    = docker_volume.claude_config.name
-    container_path = "/home/coder/.claude"
-  }
-
-  # Docker socket
-  volumes {
-    host_path      = "/var/run/docker.sock"
-    container_path = "/var/run/docker.sock"
-  }
-
   entrypoint = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
+
+  depends_on = [docker_container.mysql]
 }
 
 # ── Coder agent ───────────────────────────────────────────────────────────────
 
 resource "coder_agent" "main" {
-  arch = data.coder_parameter.agent_arch.value
+  arch = data.coder_provisioner.me.arch
   os   = "linux"
   dir  = "/home/coder/workspace"
 
-  startup_script = <<-EOT
-#!/usr/bin/env bash
-# NO set -e — script must survive errors or agent disconnects
-set -uo pipefail
-
-WORKSPACE="/home/coder/workspace"
-
-# Prepare user home with default files on first start
-if [ ! -f ~/.init_done ]; then
-  cp -rT /etc/skel ~ 2>/dev/null || true
-  touch ~/.init_done
-fi
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Laravel Dev Workspace"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Step 0: Fix permissions on mounted volumes
-sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
-sudo chown -R coder:coder /home/coder/.claude 2>/dev/null || true
-
-# Step 1: Docker socket permissions
-sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
-
-# Step 2: Git config
-git config --global user.email "dev@coder.local"
-git config --global user.name  "Coder Dev"
-
-if [ -n "$${GIT_TOKEN:-}" ]; then
-  git config --global credential.helper store
-  if [ -n "$${REPO_URL:-}" ]; then
-    REPO_HOST=$(echo "$REPO_URL" | sed -E 's|https://([^/]+)/.*|\1|')
-    echo "https://oauth2:$${GIT_TOKEN}@$${REPO_HOST}" >> ~/.git-credentials
-  fi
-  chmod 600 ~/.git-credentials 2>/dev/null || true
-  echo "Git credentials configured"
-fi
-
-# Step 3: Clone repo if not exists
-if [ -n "$${REPO_URL:-}" ] && [ ! -d "$WORKSPACE/.git" ]; then
-  echo "Cloning $${REPO_URL} (branch: $${REPO_BRANCH:-main})..."
-  # Clone into a temp dir, then move contents (workspace dir already exists as mount)
-  TMPDIR=$(mktemp -d)
-  git clone --branch "$${REPO_BRANCH:-main}" --single-branch "$REPO_URL" "$TMPDIR" 2>&1 | tail -5 || {
-    echo "FAILED to clone $REPO_URL"
-    rm -rf "$TMPDIR"
+  env = {
+    GIT_AUTHOR_NAME     = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+    GIT_AUTHOR_EMAIL    = data.coder_workspace_owner.me.email
+    GIT_COMMITTER_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+    GIT_COMMITTER_EMAIL = data.coder_workspace_owner.me.email
   }
-  if [ -d "$TMPDIR/.git" ]; then
-    shopt -s dotglob
-    mv "$TMPDIR"/* "$WORKSPACE/" 2>/dev/null || true
-    shopt -u dotglob
-    rm -rf "$TMPDIR"
-    echo "Cloned successfully"
-  fi
-elif [ -d "$WORKSPACE/.git" ]; then
-  CUR_BRANCH=$(git -C "$WORKSPACE" branch --show-current 2>/dev/null || echo "detached")
-  echo "Pulling latest on $CUR_BRANCH..."
-  git -C "$WORKSPACE" pull --ff-only 2>&1 | tail -3 || echo "Pull failed (may have local changes)"
-fi
 
-# Step 4: Composer install
-if [ -f "$WORKSPACE/composer.json" ]; then
-  echo "Running composer install..."
-  (cd "$WORKSPACE" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -5) || true
-fi
+  startup_script = <<-EOT
+    # NO set -e — script must survive errors or agent disconnects
+    set -uo pipefail
 
-# Step 5: NPM install
-if [ -f "$WORKSPACE/package.json" ]; then
-  echo "Running npm install..."
-  (cd "$WORKSPACE" && npm install --silent 2>&1 | tail -5) || true
-fi
+    WORKSPACE="/home/coder/workspace"
 
-# Step 6: Laravel environment setup
-if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env" ]; then
-  echo "Copying .env.example to .env..."
-  cp "$WORKSPACE/.env.example" "$WORKSPACE/.env"
+    if [ ! -f ~/.init_done ]; then
+      cp -rT /etc/skel ~ 2>/dev/null || true
+      touch ~/.init_done
+    fi
 
-  # Update .env with container hostnames
-  sed -i "s|^DB_HOST=.*|DB_HOST=$${MYSQL_HOST}|"           "$WORKSPACE/.env"
-  sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"           "$WORKSPACE/.env"
-  sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"           "$WORKSPACE/.env"
-  sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"           "$WORKSPACE/.env"
-  sed -i "s|^REDIS_HOST=.*|REDIS_HOST=$${REDIS_HOST}|"     "$WORKSPACE/.env"
-  sed -i "s|^CACHE_DRIVER=.*|CACHE_DRIVER=redis|"          "$WORKSPACE/.env" 2>/dev/null || true
-  sed -i "s|^SESSION_DRIVER=.*|SESSION_DRIVER=redis|"      "$WORKSPACE/.env" 2>/dev/null || true
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Laravel Dev Workspace"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  echo ".env configured"
-fi
+    sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
+    sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 
-# Step 7: Generate app key if missing
-if [ -f "$WORKSPACE/artisan" ]; then
-  APP_KEY=$(grep "^APP_KEY=" "$WORKSPACE/.env" 2>/dev/null | cut -d= -f2)
-  if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
-    echo "Generating application key..."
-    (cd "$WORKSPACE" && php artisan key:generate --force) || true
-  fi
-fi
+    if [ -n "$${GIT_TOKEN:-}" ] && [ -n "$${REPO_URL:-}" ]; then
+      git config --global credential.helper store
+      REPO_HOST=$(echo "$REPO_URL" | sed -E 's|https://([^/]+)/.*|\1|')
+      echo "https://oauth2:$${GIT_TOKEN}@$${REPO_HOST}" >> ~/.git-credentials
+      chmod 600 ~/.git-credentials 2>/dev/null || true
+    fi
 
-# Step 8: Wait for MySQL
-echo ""
-echo "Waiting for MySQL ($${MYSQL_HOST:-localhost})..."
-T=0
-until mysqladmin ping -h"$${MYSQL_HOST:-localhost}" -u laravel -plaravel --silent 2>/dev/null; do
-  T=$((T+1)); [ $T -ge 30 ] && echo "MySQL timeout" && break; sleep 3
-done
-echo "MySQL ready"
+    # Clone repo if not exists
+    if [ -n "$${REPO_URL:-}" ] && [ ! -d "$WORKSPACE/.git" ]; then
+      echo "Cloning $${REPO_URL} (branch: $${REPO_BRANCH:-main})..."
+      TMPDIR=$(mktemp -d)
+      git clone --branch "$${REPO_BRANCH:-main}" --single-branch "$REPO_URL" "$TMPDIR" 2>&1 | tail -5 || {
+        echo "FAILED to clone"; rm -rf "$TMPDIR"
+      }
+      if [ -d "$TMPDIR/.git" ]; then
+        shopt -s dotglob; mv "$TMPDIR"/* "$WORKSPACE/" 2>/dev/null || true; shopt -u dotglob
+        rm -rf "$TMPDIR"
+      fi
+    elif [ -d "$WORKSPACE/.git" ]; then
+      git -C "$WORKSPACE" pull --ff-only 2>&1 | tail -3 || true
+    fi
 
-# Step 9: Run migrations
-if [ -f "$WORKSPACE/artisan" ]; then
-  echo "Running migrations..."
-  (cd "$WORKSPACE" && php artisan migrate --force 2>&1 | tail -5) || true
-fi
+    # Composer & npm install
+    [ -f "$WORKSPACE/composer.json" ] && (cd "$WORKSPACE" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -5) || true
+    [ -f "$WORKSPACE/package.json" ] && (cd "$WORKSPACE" && npm install --silent 2>&1 | tail -5) || true
 
-# Step 10: CLAUDE.md
-CLAUDE_MD="$WORKSPACE/CLAUDE.md"
-if [ ! -f "$CLAUDE_MD" ] && [ -f "$WORKSPACE/artisan" ]; then
-  {
-    echo "# Claude Code - Laravel Workspace"
-    echo ""
-    echo "## Project"
-    echo "- Framework: Laravel"
-    echo "- PHP: $(php -r 'echo PHP_VERSION;')"
-    echo "- Dir: $WORKSPACE"
-    echo ""
-    echo "## Services"
-    echo "- MySQL: $${MYSQL_HOST} (user: laravel, pass: laravel, db: laravel)"
-    echo "- Redis: $${REDIS_HOST}"
-    echo ""
-    echo "## Commands"
-    echo '```'
-    echo "php artisan serve --host=0.0.0.0 --port=8000"
-    echo "php artisan migrate"
-    echo "php artisan tinker"
-    echo "php artisan test"
-    echo "composer require <package>"
-    echo "npm run dev"
-    echo '```'
-  } > "$CLAUDE_MD"
-  echo "CLAUDE.md generated"
-fi
+    # Laravel .env setup
+    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env" ]; then
+      cp "$WORKSPACE/.env.example" "$WORKSPACE/.env"
+      sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$WORKSPACE/.env"
+      sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$WORKSPACE/.env"
+      sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$WORKSPACE/.env"
+      sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$WORKSPACE/.env"
+      sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$WORKSPACE/.env"
+    fi
 
-# Step 11: Start Laravel dev server
-if [ -f "$WORKSPACE/artisan" ]; then
-  echo "Starting Laravel dev server on port 8000..."
-  (cd "$WORKSPACE" && php artisan serve --host=0.0.0.0 --port=8000 >/tmp/laravel-serve.log 2>&1) &
-fi
+    # Generate app key
+    if [ -f "$WORKSPACE/artisan" ]; then
+      APP_KEY=$(grep "^APP_KEY=" "$WORKSPACE/.env" 2>/dev/null | cut -d= -f2)
+      [ -z "$APP_KEY" ] && (cd "$WORKSPACE" && php artisan key:generate --force) || true
+    fi
 
-# Step 12: Start VS Code — bind to 127.0.0.1 (agent-local, IPv4 only)
-echo "Starting VS Code..."
-code-server \
-  --bind-addr 127.0.0.1:8081 \
-  --auth none \
-  --disable-telemetry \
-  "$WORKSPACE" >/tmp/code-server.log 2>&1 &
+    # Wait for MySQL
+    echo "Waiting for MySQL..."
+    T=0
+    until mysqladmin ping -h mysql -u laravel -plaravel --silent 2>/dev/null; do
+      T=$((T+1)); [ $T -ge 30 ] && echo "MySQL timeout" && break; sleep 3
+    done
 
-# Step 13: Start phpMyAdmin — bind to 127.0.0.1
-echo "Starting phpMyAdmin..."
-sudo tee /opt/phpmyadmin/config.inc.php >/dev/null <<PMAEOF
+    # Migrations
+    [ -f "$WORKSPACE/artisan" ] && (cd "$WORKSPACE" && php artisan migrate --force 2>&1 | tail -5) || true
+
+    # Start Laravel dev server
+    [ -f "$WORKSPACE/artisan" ] && (cd "$WORKSPACE" && php artisan serve --host=0.0.0.0 --port=8000 >/tmp/laravel-serve.log 2>&1) &
+
+    # phpMyAdmin
+    sudo tee /opt/phpmyadmin/config.inc.php >/dev/null <<PMAEOF
 <?php
-\$cfg['Servers'][1]['host']      = getenv('MYSQL_HOST') ?: 'localhost';
+\$cfg['Servers'][1]['host']      = 'mysql';
 \$cfg['Servers'][1]['user']      = 'laravel';
 \$cfg['Servers'][1]['password']  = 'laravel';
 \$cfg['Servers'][1]['auth_type'] = 'config';
-\$cfg['blowfish_secret']         = '$${BLOWFISH_SECRET:-coder-dev-fallback-secret}';
+\$cfg['blowfish_secret']         = '$${BLOWFISH_SECRET:-fallback}';
 PMAEOF
-php -S 127.0.0.1:8082 -t /opt/phpmyadmin/ >/tmp/phpmyadmin.log 2>&1 &
+    php -S 127.0.0.1:8082 -t /opt/phpmyadmin/ >/tmp/phpmyadmin.log 2>&1 &
 
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  DONE — use app buttons in Coder dashboard"
-echo "  Laravel App: http://localhost:8000"
-echo "  VS Code:     http://localhost:8081"
-echo "  phpMyAdmin:  http://localhost:8082"
-echo "  Claude:      claude"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Laravel: http://localhost:8000"
+    echo "  phpMyAdmin: http://localhost:8082"
+    echo "  Claude: claude"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   EOT
+
+  metadata {
+    display_name = "CPU Usage"
+    key          = "0_cpu_usage"
+    script       = "coder stat cpu"
+    interval     = 10
+    timeout      = 1
+  }
+
+  metadata {
+    display_name = "RAM Usage"
+    key          = "1_ram_usage"
+    script       = "coder stat mem"
+    interval     = 10
+    timeout      = 1
+  }
 
   metadata {
     display_name = "PHP Version"
@@ -449,16 +365,12 @@ resource "coder_app" "laravel" {
   icon         = "/icon/php.svg"
   share        = "owner"
   subdomain    = true
-}
 
-resource "coder_app" "code_server" {
-  agent_id     = coder_agent.main.id
-  slug         = "code-server"
-  display_name = "VS Code"
-  url          = "http://127.0.0.1:8081?folder=/home/coder/workspace"
-  icon         = "/icon/code.svg"
-  share        = "owner"
-  subdomain    = true
+  healthcheck {
+    url       = "http://127.0.0.1:8000"
+    interval  = 15
+    threshold = 6
+  }
 }
 
 resource "coder_app" "phpmyadmin" {
@@ -466,7 +378,34 @@ resource "coder_app" "phpmyadmin" {
   slug         = "phpmyadmin"
   display_name = "phpMyAdmin"
   url          = "http://127.0.0.1:8082"
-  icon         = "/icon/database.svg"
+  icon         = "https://www.phpmyadmin.net/static/favicon.ico"
   share        = "owner"
   subdomain    = true
+
+  healthcheck {
+    url       = "http://127.0.0.1:8082"
+    interval  = 15
+    threshold = 6
+  }
+}
+
+# ── Code-server (VS Code in browser) ─────────────────────────────────────────
+
+module "code-server" {
+  count    = data.coder_workspace.me.start_count
+  source   = "registry.coder.com/coder/code-server/coder"
+  version  = "~> 1.0"
+  agent_id = coder_agent.main.id
+  order    = 1
+}
+
+# ── Claude Code ──────────────────────────────────────────────────────────────
+
+module "claude-code" {
+  count               = data.coder_workspace.me.start_count
+  source              = "registry.coder.com/coder/claude-code/coder"
+  version             = "~> 1.0"
+  agent_id            = coder_agent.main.id
+  install_claude_code = false
+  order               = 99
 }
