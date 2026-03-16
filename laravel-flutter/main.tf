@@ -246,10 +246,13 @@ resource "coder_agent" "main" {
     sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
     sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 
-    # Git credentials
+    # Git credentials — token works for both GitHub and GitLab
     if [ -n "$${GIT_TOKEN:-}" ]; then
       git config --global credential.helper store
+      echo "https://oauth2:$${GIT_TOKEN}@github.com" >> ~/.git-credentials
+      echo "https://oauth2:$${GIT_TOKEN}@gitlab.com" >> ~/.git-credentials
       chmod 600 ~/.git-credentials 2>/dev/null || true
+      echo "Git credentials configured"
     fi
 
     # Wait for MySQL
