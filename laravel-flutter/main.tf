@@ -24,7 +24,7 @@ variable "git_token" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Git personal access token for cloning private repos"
+  description = "Git PAT set at template level (fallback if user doesn't provide one)"
 }
 
 variable "php_version" {
@@ -51,11 +51,23 @@ variable "project_base_path" {
   description = "Host path where projects are stored"
 }
 
+# ── Parameters (user-facing at workspace creation) ───────────────────────────
+
+data "coder_parameter" "git_token" {
+  name         = "git_token"
+  display_name = "Git Token"
+  description  = "Personal access token for cloning private repos (optional)"
+  default      = ""
+  mutable      = true
+  type         = "string"
+}
+
 # ── Locals & Data Sources ────────────────────────────────────────────────────
 
 locals {
   username       = data.coder_workspace_owner.me.name
   workspace_name = data.coder_workspace.me.name
+  git_token      = data.coder_parameter.git_token.value != "" ? data.coder_parameter.git_token.value : var.git_token
 }
 
 provider "docker" {
@@ -187,7 +199,7 @@ resource "docker_container" "dev" {
     "CODER_AGENT_TOKEN=${coder_agent.main.token}",
     "MYSQL_HOST=mysql",
     "REDIS_HOST=redis",
-    "GIT_TOKEN=${var.git_token}",
+    "GIT_TOKEN=${local.git_token}",
     "BLOWFISH_SECRET=${random_string.blowfish_secret.result}",
   ]
 
