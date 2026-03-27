@@ -21,6 +21,7 @@ A batteries-included [Coder](https://coder.com) workspace template for WordPress
 - **PHPUnit + WP_Mock** — unit testing
 - **PHP_CodeSniffer + WPCS** — WordPress coding standards linting
 - **Claude Code** — installed via [official Coder module](https://registry.coder.com/modules/claude-code) with OAuth support
+- **GitHub CLI (`gh`)** — clone, pull, push, and manage PRs from the terminal
 - **code-server** — VS Code in the browser with PHP + WP extensions
 
 ---
@@ -119,6 +120,30 @@ claude "check for security issues: missing nonces, unescaped output"
 ```
 
 The `CLAUDE.md` file in your workspace root is auto-generated with plugin context.
+
+---
+
+## GitHub CLI Login & Usage
+
+GitHub CLI (`gh`) is pre-installed. Authenticate to clone private repos, push code, and manage pull requests.
+
+```bash
+# Login (interactive — choose GitHub.com, HTTPS, and paste a token or use browser auth)
+gh auth login
+
+# Clone a repo
+gh repo clone owner/repo
+
+# Pull & push
+git pull
+git push
+
+# Pull requests
+gh pr create --title "My changes" --body "Description"
+gh pr list
+gh pr checkout 42
+gh pr merge 42
+```
 
 ---
 

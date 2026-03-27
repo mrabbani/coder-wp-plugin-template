@@ -23,6 +23,7 @@ A batteries-included [Coder](https://coder.com) workspace template for full-stac
 - **MySQL 8.0** — database
 - **Redis 7** — cache & session driver
 - **Claude Code** — AI assistant
+- **GitHub CLI (`gh`)** — clone, pull, push, and manage PRs from the terminal
 - **code-server** — VS Code with PHP, Laravel, Dart & Flutter extensions
 
 ---
@@ -76,6 +77,43 @@ coder open my-fullstack
 | `project_base_path` | Host path for project storage | `/home/ubuntu/laravel-flutter-projects` |
 
 No user-facing parameters — workspace starts immediately with all services ready. Clone your repos manually into `workspace/`.
+
+---
+
+## Claude Code & GitHub CLI Login
+
+### Claude Code
+
+```bash
+# Login (uses OAuth — opens browser or paste token)
+claude login
+
+# Start interactive session
+claude
+
+# One-shot tasks
+claude "add an API endpoint for user authentication"
+```
+
+### GitHub CLI
+
+```bash
+# Login (interactive — choose GitHub.com, HTTPS, and paste a token or use browser auth)
+gh auth login
+
+# Clone a repo
+gh repo clone owner/repo
+
+# Pull & push
+git pull
+git push
+
+# Pull requests
+gh pr create --title "My changes" --body "Description"
+gh pr list
+gh pr checkout 42
+gh pr merge 42
+```
 
 ---
 
