@@ -46,8 +46,7 @@ git clone https://github.com/mrabbani/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # 2. Push the template to your Coder instance
-cd flutter
-coder templates push flutter --directory . --yes
+coder templates push flutter --directory ./flutter --yes
 
 # 3. Create a workspace
 coder create my-flutter \

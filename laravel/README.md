@@ -49,8 +49,7 @@ git clone https://github.com/mrabbani/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # 2. Push the template to your Coder instance
-cd laravel
-coder templates push laravel --directory . --yes
+coder templates push laravel --directory ./laravel --yes
 
 # 3. Create a workspace
 coder create my-laravel \

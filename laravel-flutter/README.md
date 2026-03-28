@@ -56,8 +56,7 @@ git clone https://github.com/mrabbani/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # 2. Push the template to your Coder instance
-cd laravel-flutter
-coder templates push laravel-flutter --directory . --yes
+coder templates push laravel-flutter --directory ./laravel-flutter --yes
 
 # 3. Create a workspace
 coder create my-fullstack \

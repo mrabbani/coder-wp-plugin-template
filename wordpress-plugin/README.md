@@ -52,8 +52,7 @@ git clone https://github.com/mrabbani/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # 2. Push the template to your Coder instance
-cd wordpress-plugin
-coder templates push wordpress-plugin   --directory .   --yes
+coder templates push wordpress-plugin --directory ./wordpress-plugin --yes
 
 # 3. Create a workspace
 coder create my-plugin \

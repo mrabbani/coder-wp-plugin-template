@@ -58,21 +58,13 @@ git clone https://github.com/mrabbani/coder-wp-plugin-template
 cd coder-wp-plugin-template
 
 # Push a template (pick one or push all)
-cd wordpress-plugin
-coder templates push wordpress-plugin --directory . --yes
-cd ..
+coder templates push wordpress-plugin --directory ./wordpress-plugin --yes
 
-cd laravel
-coder templates push laravel --directory . --yes
-cd ..
+coder templates push laravel --directory ./laravel --yes
 
-cd flutter
-coder templates push flutter --directory . --yes
-cd ..
+coder templates push flutter --directory ./flutter --yes
 
-cd laravel-flutter
-coder templates push laravel-flutter --directory . --yes
-cd ..
+coder templates push laravel-flutter --directory ./laravel-flutter --yes
 ```
 
 ### Change PHP Version
