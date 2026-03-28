@@ -382,6 +382,8 @@ resource "coder_script" "claude_code_ui_install" {
     LOG="$${CODER_HOME}/.claude-code-ui.log"
 
     echo "Starting Claude Code UI on port $${PORT}..."
+    echo " UI user    : coder"
+    echo " UI pass    : coder"
 
     export SERVER_PORT="$${PORT}"
     export DATABASE_PATH="$${CODER_HOME}/.claude-code-ui.db"
