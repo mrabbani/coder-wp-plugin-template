@@ -141,15 +141,20 @@ RCEOF
       fi
     done
 
-    # Install nvm for the coder user
-    if [ ! -d "/home/coder/.nvm" ]; then
-      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-    fi
-
     # First-run skeleton copy
     if [ ! -f ~/.init_done ]; then
       cp -rT /etc/skel ~ 2>/dev/null || true
       touch ~/.init_done
+    fi
+
+    # Install nvm for the coder user
+    touch ~/.bashrc
+    if [ ! -d "/home/coder/.nvm" ]; then
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    fi
+    if ! grep -q 'NVM_DIR' ~/.bashrc 2>/dev/null; then
+      echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+      echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> ~/.bashrc
     fi
 
     # Install socat for IPv4 proxying

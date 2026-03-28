@@ -279,8 +279,13 @@ resource "coder_agent" "main" {
     fi
 
     # Install nvm for the coder user
+    touch ~/.bashrc
     if [ ! -d "/home/coder/.nvm" ]; then
       curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    fi
+    if ! grep -q 'NVM_DIR' ~/.bashrc 2>/dev/null; then
+      echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+      echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> ~/.bashrc
     fi
 
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
