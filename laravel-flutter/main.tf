@@ -516,3 +516,74 @@ module "claude-code" {
   install_claude_code = false
   order               = 99
 }
+
+# ── Claude Code UI (web interface) ───────────────────────────────────────────
+
+resource "coder_script" "claude_code_ui_install" {
+  agent_id     = coder_agent.main.id
+  display_name = "Claude Code UI"
+  icon         = "/emojis/1f4ac.png"
+  run_on_start = true
+  start_blocks_login = false
+  script = <<-EOT
+    #!/usr/bin/env bash
+
+    PORT=13376
+    CODER_HOME="/home/coder"
+    LOG="$${CODER_HOME}/.claude-code-ui.log"
+
+    echo "Starting Claude Code UI on port $${PORT}..."
+    echo " UI user    : coder"
+    echo " UI pass    : coder"
+
+    export SERVER_PORT="$${PORT}"
+    export DATABASE_PATH="$${CODER_HOME}/.claude-code-ui.db"
+
+    # Remove old DB with incompatible schema (let app recreate it)
+    if [ -f "$${DATABASE_PATH}" ]; then
+      if ! sqlite3 "$${DATABASE_PATH}" "SELECT api_key FROM api_keys LIMIT 0;" 2>/dev/null; then
+        echo "Removing incompatible Claude Code UI database..."
+        rm -f "$${DATABASE_PATH}"
+      fi
+    fi
+
+    nohup npx -y @siteboon/claude-code-ui </dev/null > "$${LOG}" 2>&1 &
+    CCUI_PID=$!
+    echo $${CCUI_PID} > "$${CODER_HOME}/.claude-code-ui.pid"
+
+    # Wait for server to be ready
+    for i in $(seq 1 30); do
+      if curl -s http://localhost:$${PORT} > /dev/null 2>&1; then
+        echo "Claude Code UI is running on port $${PORT}"
+
+        # Create default user on first run via registration API
+        REGISTER=$(curl -s -o /dev/null -w "%%{http_code}" \
+          -X POST http://localhost:$${PORT}/api/auth/register \
+          -H "Content-Type: application/json" \
+          -d '{"username":"coder","password":"coder"}')
+        if [ "$${REGISTER}" = "201" ]; then
+          echo "Default user 'coder' created"
+        fi
+        exit 0
+      fi
+      if ! kill -0 $${CCUI_PID} 2>/dev/null; then
+        echo "ERROR: Claude Code UI crashed. Log:"
+        tail -20 "$${LOG}" 2>/dev/null || true
+        exit 1
+      fi
+      sleep 2
+    done
+    echo "WARNING: Claude Code UI did not respond within 60s. Check $${LOG}"
+  EOT
+}
+
+resource "coder_app" "claude_code_ui" {
+  agent_id     = coder_agent.main.id
+  slug         = "ccui"
+  display_name = "Claude Code UI"
+  icon         = "/emojis/1f4ac.png"
+  url          = "http://localhost:13376"
+  share        = "owner"
+  subdomain    = true
+  open_in      = "tab"
+}
