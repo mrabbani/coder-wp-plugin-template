@@ -256,7 +256,13 @@ resource "docker_container" "dev" {
     read_only      = false
   }
 
-  entrypoint = ["sh", "-c", "sudo chown -R coder:coder /home/coder 2>/dev/null || true; ${replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")}"]
+  user       = "root"
+  entrypoint = ["sh", "-c", <<-EOE
+    chown -R coder:coder /home/coder
+    chmod -R 775 /home/coder/workspace 2>/dev/null || true
+    exec su -s /bin/sh coder -c ${jsonencode(replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal"))}
+  EOE
+  ]
 
   depends_on = [docker_container.mysql]
 }
