@@ -167,6 +167,11 @@ resource "coder_agent" "main" {
       touch ~/.init_done
     fi
 
+    # Install nvm for the coder user
+    if [ ! -d "/home/coder/.nvm" ]; then
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    fi
+
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  Flutter Mobile Dev Workspace"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
