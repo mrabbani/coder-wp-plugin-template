@@ -48,8 +48,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
 # ── Coder user ───────────────────────────────────────────────────────────────
-RUN useradd -m -s /bin/bash coder \
-    && echo "coder ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/coder
+RUN useradd -m -s /bin/bash -u 1000 coder \
+    && echo "coder ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/coder \
+    && mkdir -p /home/coder/workspace \
+    && chown -R coder:coder /home/coder
 
 # ── Flutter SDK (installed as coder user for proper permissions) ─────────────
 USER coder
