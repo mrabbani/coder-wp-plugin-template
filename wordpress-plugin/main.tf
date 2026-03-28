@@ -374,10 +374,10 @@ resource "coder_script" "claude_code_ui_install" {
       cd claudecodeui
     fi
 
-    # Always clean install to avoid npm optional dependency bug with rollup native modules
+    # Install ALL deps (including devDependencies needed for vite build)
     rm -rf node_modules package-lock.json 2>/dev/null || true
     echo "Installing Claude Code UI dependencies..."
-    npm install 2>&1
+    NODE_ENV=development npm install 2>&1
 
     if [ ! -f "$${CODER_HOME}/.claude-code-ui.db" ]; then
       echo "Creating DB file..."
@@ -390,16 +390,20 @@ resource "coder_script" "claude_code_ui_install" {
     printf '%s\n' \
       "PORT=$${PORT}" \
       "VITE_PORT=5173" \
-      "NODE_ENV=production" \
       "VITE_IS_PLATFORM=true" \
       "VITE_CONTEXT_WINDOW=160000" \
       "CONTEXT_WINDOW=160000" \
       "DATABASE_PATH=$${CODER_HOME}/.claude-code-ui.db" \
       > .env
 
+    # Build frontend assets first, then start server in production mode
+    echo "Building Claude Code UI frontend..."
+    npm run build 2>&1 || { echo "ERROR: vite build failed"; cat "$${CODER_HOME}/.claude-code-ui.log" 2>/dev/null || true; }
+
     export DATABASE_PATH="$${CODER_HOME}/.claude-code-ui.db"
+    export NODE_ENV=production
     cd "$${INSTALL_PATH}/claudecodeui"
-    nohup npm start </dev/null > "$${CODER_HOME}/.claude-code-ui.log" 2>&1 &
+    nohup node server/index.js </dev/null > "$${CODER_HOME}/.claude-code-ui.log" 2>&1 &
     CCUI_PID=$!
     echo $${CCUI_PID} > "$${CODER_HOME}/.claude-code-ui.pid"
     echo "Claude Code UI started with PID $${CCUI_PID} on port $${PORT}"
