@@ -277,6 +277,7 @@ resource "coder_agent" "main" {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     sudo chown -R coder:coder /home/coder 2>/dev/null || true
+    sudo chmod -R 775 /home/coder/workspace 2>/dev/null || true
     sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 
     if [ -n "$${GIT_TOKEN:-}" ] && [ -n "$${REPO_URL:-}" ]; then

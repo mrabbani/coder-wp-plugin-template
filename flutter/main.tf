@@ -166,6 +166,7 @@ resource "coder_agent" "main" {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     sudo chown -R coder:coder /home/coder 2>/dev/null || true
+    sudo chmod -R 775 /home/coder/workspace 2>/dev/null || true
 
     REPO_URL="$${REPO_URL:-}"
     REPO_BRANCH="$${REPO_BRANCH:-main}"
