@@ -165,7 +165,7 @@ resource "coder_agent" "main" {
     echo "  Flutter Mobile Dev Workspace"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
+    sudo chown -R coder:coder /home/coder 2>/dev/null || true
 
     REPO_URL="$${REPO_URL:-}"
     REPO_BRANCH="$${REPO_BRANCH:-main}"

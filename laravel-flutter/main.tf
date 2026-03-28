@@ -286,7 +286,7 @@ resource "coder_agent" "main" {
     echo "  Laravel + Flutter Full-Stack Workspace"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    sudo chown -R coder:coder "$WORKSPACE" 2>/dev/null || true
+    sudo chown -R coder:coder /home/coder 2>/dev/null || true
     sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
 
     # Git credentials — token works for both GitHub and GitLab
