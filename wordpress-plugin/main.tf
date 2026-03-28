@@ -388,7 +388,7 @@ resource "coder_script" "claude_code_ui_install" {
 
     export PATH="$${CODER_HOME}/.local/bin:$${PATH}"
     printf '%s\n' \
-      "PORT=$${PORT}" \
+      "SERVER_PORT=$${PORT}" \
       "VITE_PORT=5173" \
       "VITE_IS_PLATFORM=true" \
       "VITE_CONTEXT_WINDOW=160000" \
