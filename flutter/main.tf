@@ -82,10 +82,6 @@ resource "docker_volume" "home_volume" {
   lifecycle { ignore_changes = all }
 }
 
-resource "docker_volume" "workspace_volume" {
-  name = "coder-${data.coder_workspace.me.id}-workspace"
-  lifecycle { ignore_changes = all }
-}
 
 # ── Dev image ────────────────────────────────────────────────────────────────
 
@@ -133,12 +129,6 @@ resource "docker_container" "dev" {
     read_only      = false
   }
 
-  volumes {
-    volume_name    = docker_volume.workspace_volume.name
-    container_path = "/home/coder/workspace"
-    read_only      = false
-  }
-
   entrypoint = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
 }
 
@@ -161,6 +151,7 @@ resource "coder_agent" "main" {
     set -uo pipefail
 
     WORKSPACE="/home/coder/workspace"
+    mkdir -p "$WORKSPACE"
 
     if [ ! -f ~/.init_done ]; then
       cp -rT /etc/skel ~ 2>/dev/null || true
