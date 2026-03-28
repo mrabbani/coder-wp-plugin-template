@@ -82,6 +82,48 @@ No user-facing parameters — workspace starts immediately with all services rea
 
 ---
 
+## Cloning Your Repos
+
+The workspace has two project folders: `backend/` for Laravel and `mobile/` for Flutter.
+
+```bash
+# Clone Laravel backend
+cd ~/workspace
+git clone https://github.com/your-org/your-laravel-api.git backend
+cd backend
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
+```
+
+```bash
+# Clone Flutter mobile app
+cd ~/workspace
+git clone https://github.com/your-org/your-flutter-app.git mobile
+cd mobile
+flutter pub get
+```
+
+### Using a private repo with git_token
+
+If you set `git_token` when creating the workspace, private repos work automatically:
+
+```bash
+git clone https://github.com/your-org/private-laravel-api.git backend
+git clone https://github.com/your-org/private-flutter-app.git mobile
+```
+
+### Using GitHub CLI
+
+```bash
+gh auth login
+gh repo clone your-org/your-laravel-api backend
+gh repo clone your-org/your-flutter-app mobile
+```
+
+---
+
 ## Claude Code & GitHub CLI Login
 
 ### Claude Code
