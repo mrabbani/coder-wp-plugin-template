@@ -388,6 +388,14 @@ resource "coder_script" "claude_code_ui_install" {
     export SERVER_PORT="$${PORT}"
     export DATABASE_PATH="$${CODER_HOME}/.claude-code-ui.db"
 
+    # Remove old DB with incompatible schema (let app recreate it)
+    if [ -f "$${DATABASE_PATH}" ]; then
+      if ! sqlite3 "$${DATABASE_PATH}" "SELECT api_key FROM api_keys LIMIT 0;" 2>/dev/null; then
+        echo "Removing incompatible Claude Code UI database..."
+        rm -f "$${DATABASE_PATH}"
+      fi
+    fi
+
     nohup npx -y @siteboon/claude-code-ui </dev/null > "$${LOG}" 2>&1 &
     CCUI_PID=$!
     echo $${CCUI_PID} > "$${CODER_HOME}/.claude-code-ui.pid"
