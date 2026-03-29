@@ -344,28 +344,35 @@ resource "coder_agent" "main" {
       if [ -f "$DIR/artisan" ]; then
         echo "Found Laravel project at $DIR"
 
-        # .env setup
-        if [ -f "$DIR/.env.example" ] && [ ! -f "$DIR/.env" ]; then
-          cp "$DIR/.env.example" "$DIR/.env"
-          sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$DIR/.env"
-          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$DIR/.env"
-          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$DIR/.env"
-          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$DIR/.env"
-          sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$DIR/.env"
-          if ! grep -q "^ASSET_URL=" "$DIR/.env"; then
-            echo "ASSET_URL=/" >> "$DIR/.env"
+        # .env setup — stored outside sync root so local .env is independent
+        DIRNAME=$(basename "$DIR")
+        ENV_REMOTE="/tmp/laravel-$${DIRNAME}.env"
+        if [ -f "$DIR/.env.example" ] && [ ! -f "$ENV_REMOTE" ]; then
+          cp "$DIR/.env.example" "$ENV_REMOTE"
+          sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$ENV_REMOTE"
+          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$ENV_REMOTE"
+          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$ENV_REMOTE"
+          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$ENV_REMOTE"
+          sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$ENV_REMOTE"
+          if ! grep -q "^ASSET_URL=" "$ENV_REMOTE"; then
+            echo "ASSET_URL=/" >> "$ENV_REMOTE"
           fi
           echo ".env configured for $DIR"
         fi
 
         # Force HTTPS when served behind Coder's reverse proxy
-        if [ -f "$DIR/.env" ]; then
-          grep -q "^TRUSTED_PROXIES=" "$DIR/.env" && \
-            sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$DIR/.env" || \
-            echo "TRUSTED_PROXIES=*" >> "$DIR/.env"
-          grep -q "^FORCE_HTTPS=" "$DIR/.env" && \
-            sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$DIR/.env" || \
-            echo "FORCE_HTTPS=true" >> "$DIR/.env"
+        if [ -f "$ENV_REMOTE" ]; then
+          grep -q "^TRUSTED_PROXIES=" "$ENV_REMOTE" && \
+            sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$ENV_REMOTE" || \
+            echo "TRUSTED_PROXIES=*" >> "$ENV_REMOTE"
+          grep -q "^FORCE_HTTPS=" "$ENV_REMOTE" && \
+            sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$ENV_REMOTE" || \
+            echo "FORCE_HTTPS=true" >> "$ENV_REMOTE"
+        fi
+
+        # Symlink .env → remote env (Coder Desktop won't sync symlink targets outside root)
+        if [ -f "$ENV_REMOTE" ]; then
+          ln -sf "$ENV_REMOTE" "$DIR/.env"
         fi
 
         # App key

@@ -337,28 +337,33 @@ resource "coder_agent" "main" {
     [ -f "$WORKSPACE/composer.json" ] && (cd "$WORKSPACE" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -5) || true
     [ -f "$WORKSPACE/package.json" ] && (cd "$WORKSPACE" && npm install --silent 2>&1 | tail -5) || true
 
-    # Laravel .env setup
-    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env" ]; then
-      cp "$WORKSPACE/.env.example" "$WORKSPACE/.env"
-      sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$WORKSPACE/.env"
-      sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$WORKSPACE/.env"
-      sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$WORKSPACE/.env"
-      sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$WORKSPACE/.env"
-      sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$WORKSPACE/.env"
-      # Force HTTPS when served behind Coder's reverse proxy
-      if ! grep -q "^ASSET_URL=" "$WORKSPACE/.env"; then
-        echo "ASSET_URL=/" >> "$WORKSPACE/.env"
+    # Laravel .env setup — stored outside sync root so local .env is independent
+    ENV_REMOTE="/tmp/laravel-remote.env"
+    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$ENV_REMOTE" ]; then
+      cp "$WORKSPACE/.env.example" "$ENV_REMOTE"
+      sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$ENV_REMOTE"
+      sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$ENV_REMOTE"
+      sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$ENV_REMOTE"
+      sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$ENV_REMOTE"
+      sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$ENV_REMOTE"
+      if ! grep -q "^ASSET_URL=" "$ENV_REMOTE"; then
+        echo "ASSET_URL=/" >> "$ENV_REMOTE"
       fi
     fi
 
     # Always ensure trusted proxies and HTTPS are set for Coder's reverse proxy
-    if [ -f "$WORKSPACE/.env" ]; then
-      grep -q "^TRUSTED_PROXIES=" "$WORKSPACE/.env" && \
-        sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$WORKSPACE/.env" || \
-        echo "TRUSTED_PROXIES=*" >> "$WORKSPACE/.env"
-      grep -q "^FORCE_HTTPS=" "$WORKSPACE/.env" && \
-        sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$WORKSPACE/.env" || \
-        echo "FORCE_HTTPS=true" >> "$WORKSPACE/.env"
+    if [ -f "$ENV_REMOTE" ]; then
+      grep -q "^TRUSTED_PROXIES=" "$ENV_REMOTE" && \
+        sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$ENV_REMOTE" || \
+        echo "TRUSTED_PROXIES=*" >> "$ENV_REMOTE"
+      grep -q "^FORCE_HTTPS=" "$ENV_REMOTE" && \
+        sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$ENV_REMOTE" || \
+        echo "FORCE_HTTPS=true" >> "$ENV_REMOTE"
+    fi
+
+    # Symlink .env → remote env (Coder Desktop won't sync symlink targets outside root)
+    if [ -f "$ENV_REMOTE" ]; then
+      ln -sf "$ENV_REMOTE" "$WORKSPACE/.env"
     fi
 
     # Generate app key
