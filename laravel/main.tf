@@ -347,16 +347,40 @@ resource "coder_agent" "main" {
     [ -f "$WORKSPACE/composer.json" ] && (cd "$WORKSPACE" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -5) || true
     [ -f "$WORKSPACE/package.json" ] && (cd "$WORKSPACE" && npm install --silent 2>&1 | tail -5) || true
 
-    # Laravel .env setup — only create if no .env exists (don't overwrite synced local .env)
-    # Container env vars (DB_HOST, REDIS_HOST, etc.) override .env values,
-    # so even if Coder Desktop syncs your local .env, remote still works.
-    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env" ]; then
-      cp "$WORKSPACE/.env.example" "$WORKSPACE/.env"
+    # Laravel .env.coder — remote config that won't conflict with local .env
+    # Use APP_ENV=coder or --env=coder for all artisan commands
+    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env.coder" ]; then
+      cp "$WORKSPACE/.env.example" "$WORKSPACE/.env.coder"
+      sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$WORKSPACE/.env.coder"
+      sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$WORKSPACE/.env.coder"
+      sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$WORKSPACE/.env.coder"
+      sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$WORKSPACE/.env.coder"
+      sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$WORKSPACE/.env.coder"
+      grep -q "^TRUSTED_PROXIES=" "$WORKSPACE/.env.coder" && \
+        sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$WORKSPACE/.env.coder" || \
+        echo "TRUSTED_PROXIES=*" >> "$WORKSPACE/.env.coder"
+      grep -q "^FORCE_HTTPS=" "$WORKSPACE/.env.coder" && \
+        sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$WORKSPACE/.env.coder" || \
+        echo "FORCE_HTTPS=true" >> "$WORKSPACE/.env.coder"
+      if ! grep -q "^ASSET_URL=" "$WORKSPACE/.env.coder"; then
+        echo "ASSET_URL=/" >> "$WORKSPACE/.env.coder"
+      fi
     fi
+
+    # Add .env.coder to .gitignore
+    if [ -f "$WORKSPACE/.gitignore" ] && ! grep -q ".env.coder" "$WORKSPACE/.gitignore"; then
+      echo ".env.coder" >> "$WORKSPACE/.gitignore"
+    fi
+
+    # Set APP_ENV=coder globally so all artisan commands use .env.coder
+    if ! grep -q 'APP_ENV=coder' ~/.bashrc 2>/dev/null; then
+      echo 'export APP_ENV=coder' >> ~/.bashrc
+    fi
+    export APP_ENV=coder
 
     # Generate app key
     if [ -f "$WORKSPACE/artisan" ]; then
-      APP_KEY=$(grep "^APP_KEY=" "$WORKSPACE/.env" 2>/dev/null | cut -d= -f2)
+      APP_KEY=$(grep "^APP_KEY=" "$WORKSPACE/.env.coder" 2>/dev/null | cut -d= -f2)
       [ -z "$APP_KEY" ] && (cd "$WORKSPACE" && php artisan key:generate --force) || true
     fi
 

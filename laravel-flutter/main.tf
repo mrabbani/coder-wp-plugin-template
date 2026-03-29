@@ -323,6 +323,12 @@ resource "coder_agent" "main" {
       echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> ~/.bashrc
     fi
 
+    # Set APP_ENV=coder globally so all artisan commands use .env.coder
+    if ! grep -q 'APP_ENV=coder' ~/.bashrc 2>/dev/null; then
+      echo 'export APP_ENV=coder' >> ~/.bashrc
+    fi
+    export APP_ENV=coder
+
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  Laravel + Flutter Full-Stack Workspace"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -353,14 +359,29 @@ resource "coder_agent" "main" {
       if [ -f "$DIR/artisan" ]; then
         echo "Found Laravel project at $DIR"
 
-        # .env setup — container env vars (DB_HOST, REDIS_HOST, etc.) override .env values,
-        # so even if Coder Desktop syncs your local .env, remote still works.
-        if [ -f "$DIR/.env.example" ] && [ ! -f "$DIR/.env" ]; then
-          cp "$DIR/.env.example" "$DIR/.env"
+        # .env.coder — remote config that won't conflict with local .env
+        if [ -f "$DIR/.env.example" ] && [ ! -f "$DIR/.env.coder" ]; then
+          cp "$DIR/.env.example" "$DIR/.env.coder"
+          sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$DIR/.env.coder"
+          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$DIR/.env.coder"
+          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$DIR/.env.coder"
+          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$DIR/.env.coder"
+          sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$DIR/.env.coder"
+          grep -q "^TRUSTED_PROXIES=" "$DIR/.env.coder" && \
+            sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$DIR/.env.coder" || \
+            echo "TRUSTED_PROXIES=*" >> "$DIR/.env.coder"
+          grep -q "^FORCE_HTTPS=" "$DIR/.env.coder" && \
+            sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$DIR/.env.coder" || \
+            echo "FORCE_HTTPS=true" >> "$DIR/.env.coder"
+        fi
+
+        # Add .env.coder to .gitignore
+        if [ -f "$DIR/.gitignore" ] && ! grep -q ".env.coder" "$DIR/.gitignore"; then
+          echo ".env.coder" >> "$DIR/.gitignore"
         fi
 
         # App key
-        APP_KEY=$(grep "^APP_KEY=" "$DIR/.env" 2>/dev/null | cut -d= -f2)
+        APP_KEY=$(grep "^APP_KEY=" "$DIR/.env.coder" 2>/dev/null | cut -d= -f2)
         [ -z "$APP_KEY" ] && (cd "$DIR" && php artisan key:generate --force) || true
 
         # Composer & npm
