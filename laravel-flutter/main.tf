@@ -259,6 +259,15 @@ resource "docker_container" "dev" {
     "REDIS_HOST=redis",
     "GIT_TOKEN=${local.git_token}",
     "BLOWFISH_SECRET=${random_string.blowfish_secret.result}",
+    # Laravel env vars — override .env so Coder Desktop sync can't break remote
+    "DB_HOST=mysql",
+    "DB_DATABASE=laravel",
+    "DB_USERNAME=laravel",
+    "DB_PASSWORD=laravel",
+    "DB_CONNECTION=mysql",
+    "TRUSTED_PROXIES=*",
+    "FORCE_HTTPS=true",
+    "ASSET_URL=/",
   ]
 
   host {
@@ -344,50 +353,27 @@ resource "coder_agent" "main" {
       if [ -f "$DIR/artisan" ]; then
         echo "Found Laravel project at $DIR"
 
-        # .env.coder setup — separate from .env so Coder Desktop sync doesn't conflict
-        if [ -f "$DIR/.env.example" ] && [ ! -f "$DIR/.env.coder" ]; then
-          cp "$DIR/.env.example" "$DIR/.env.coder"
-          sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$DIR/.env.coder"
-          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$DIR/.env.coder"
-          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$DIR/.env.coder"
-          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$DIR/.env.coder"
-          sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$DIR/.env.coder"
-          if ! grep -q "^ASSET_URL=" "$DIR/.env.coder"; then
-            echo "ASSET_URL=/" >> "$DIR/.env.coder"
-          fi
-          echo ".env.coder configured for $DIR"
+        # .env setup — container env vars (DB_HOST, REDIS_HOST, etc.) override .env values,
+        # so even if Coder Desktop syncs your local .env, remote still works.
+        if [ -f "$DIR/.env.example" ] && [ ! -f "$DIR/.env" ]; then
+          cp "$DIR/.env.example" "$DIR/.env"
         fi
 
-        # Force HTTPS when served behind Coder's reverse proxy
-        if [ -f "$DIR/.env.coder" ]; then
-          grep -q "^TRUSTED_PROXIES=" "$DIR/.env.coder" && \
-            sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$DIR/.env.coder" || \
-            echo "TRUSTED_PROXIES=*" >> "$DIR/.env.coder"
-          grep -q "^FORCE_HTTPS=" "$DIR/.env.coder" && \
-            sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$DIR/.env.coder" || \
-            echo "FORCE_HTTPS=true" >> "$DIR/.env.coder"
-        fi
-
-        # Add .env.coder to .gitignore
-        if [ -f "$DIR/.gitignore" ] && ! grep -q ".env.coder" "$DIR/.gitignore"; then
-          echo ".env.coder" >> "$DIR/.gitignore"
-        fi
-
-        # App key (using --env=coder to load .env.coder)
-        APP_KEY=$(grep "^APP_KEY=" "$DIR/.env.coder" 2>/dev/null | cut -d= -f2)
-        [ -z "$APP_KEY" ] && (cd "$DIR" && php artisan key:generate --env=coder --force) || true
+        # App key
+        APP_KEY=$(grep "^APP_KEY=" "$DIR/.env" 2>/dev/null | cut -d= -f2)
+        [ -z "$APP_KEY" ] && (cd "$DIR" && php artisan key:generate --force) || true
 
         # Composer & npm
         [ -f "$DIR/composer.json" ] && (cd "$DIR" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -5) || true
         [ -f "$DIR/package.json" ] && (cd "$DIR" && npm install --silent 2>&1 | tail -5) || true
 
         # Migrations
-        (cd "$DIR" && php artisan migrate --env=coder --force 2>&1 | tail -5) || true
+        (cd "$DIR" && php artisan migrate --force 2>&1 | tail -5) || true
 
-        # Serve (--env=coder loads .env.coder instead of .env)
+        # Serve
         echo "Starting Laravel dev server from $DIR on port 8000..."
         cd "$DIR"
-        nohup php artisan serve --env=coder --host=0.0.0.0 --port=8000 </dev/null >/tmp/laravel-serve.log 2>&1 &
+        nohup php artisan serve --host=0.0.0.0 --port=8000 </dev/null >/tmp/laravel-serve.log 2>&1 &
         cd -
         break
       fi

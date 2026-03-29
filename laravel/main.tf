@@ -250,6 +250,16 @@ resource "docker_container" "dev" {
     "REPO_URL=${data.coder_parameter.repo_url.value}",
     "REPO_BRANCH=${data.coder_parameter.repo_branch.value}",
     "BLOWFISH_SECRET=${random_string.blowfish_secret.result}",
+    # Laravel env vars — override .env so Coder Desktop sync can't break remote
+    "DB_HOST=mysql",
+    "DB_DATABASE=laravel",
+    "DB_USERNAME=laravel",
+    "DB_PASSWORD=laravel",
+    "DB_CONNECTION=mysql",
+    "REDIS_HOST=redis",
+    "TRUSTED_PROXIES=*",
+    "FORCE_HTTPS=true",
+    "ASSET_URL=/",
   ]
 
   host {
@@ -337,39 +347,17 @@ resource "coder_agent" "main" {
     [ -f "$WORKSPACE/composer.json" ] && (cd "$WORKSPACE" && composer install --no-interaction --prefer-dist -q 2>&1 | tail -5) || true
     [ -f "$WORKSPACE/package.json" ] && (cd "$WORKSPACE" && npm install --silent 2>&1 | tail -5) || true
 
-    # Laravel .env setup — use .env.coder (not .env) to avoid Coder Desktop sync conflicts
-    # Your local .env stays untouched, remote uses .env.coder loaded via APP_ENV_PATH
-    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env.coder" ]; then
-      cp "$WORKSPACE/.env.example" "$WORKSPACE/.env.coder"
-      sed -i "s|^DB_HOST=.*|DB_HOST=mysql|"            "$WORKSPACE/.env.coder"
-      sed -i "s|^DB_DATABASE=.*|DB_DATABASE=laravel|"   "$WORKSPACE/.env.coder"
-      sed -i "s|^DB_USERNAME=.*|DB_USERNAME=laravel|"   "$WORKSPACE/.env.coder"
-      sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=laravel|"   "$WORKSPACE/.env.coder"
-      sed -i "s|^REDIS_HOST=.*|REDIS_HOST=redis|"       "$WORKSPACE/.env.coder"
-      if ! grep -q "^ASSET_URL=" "$WORKSPACE/.env.coder"; then
-        echo "ASSET_URL=/" >> "$WORKSPACE/.env.coder"
-      fi
+    # Laravel .env setup — only create if no .env exists (don't overwrite synced local .env)
+    # Container env vars (DB_HOST, REDIS_HOST, etc.) override .env values,
+    # so even if Coder Desktop syncs your local .env, remote still works.
+    if [ -f "$WORKSPACE/.env.example" ] && [ ! -f "$WORKSPACE/.env" ]; then
+      cp "$WORKSPACE/.env.example" "$WORKSPACE/.env"
     fi
 
-    # Always ensure trusted proxies and HTTPS are set for Coder's reverse proxy
-    if [ -f "$WORKSPACE/.env.coder" ]; then
-      grep -q "^TRUSTED_PROXIES=" "$WORKSPACE/.env.coder" && \
-        sed -i "s|^TRUSTED_PROXIES=.*|TRUSTED_PROXIES=*|" "$WORKSPACE/.env.coder" || \
-        echo "TRUSTED_PROXIES=*" >> "$WORKSPACE/.env.coder"
-      grep -q "^FORCE_HTTPS=" "$WORKSPACE/.env.coder" && \
-        sed -i "s|^FORCE_HTTPS=.*|FORCE_HTTPS=true|" "$WORKSPACE/.env.coder" || \
-        echo "FORCE_HTTPS=true" >> "$WORKSPACE/.env.coder"
-    fi
-
-    # Add .env.coder to .gitignore so it doesn't get committed
-    if [ -f "$WORKSPACE/.gitignore" ] && ! grep -q ".env.coder" "$WORKSPACE/.gitignore"; then
-      echo ".env.coder" >> "$WORKSPACE/.gitignore"
-    fi
-
-    # Generate app key (using .env.coder on remote)
+    # Generate app key
     if [ -f "$WORKSPACE/artisan" ]; then
-      APP_KEY=$(grep "^APP_KEY=" "$WORKSPACE/.env.coder" 2>/dev/null | cut -d= -f2)
-      [ -z "$APP_KEY" ] && (cd "$WORKSPACE" && php artisan key:generate --env=coder --force) || true
+      APP_KEY=$(grep "^APP_KEY=" "$WORKSPACE/.env" 2>/dev/null | cut -d= -f2)
+      [ -z "$APP_KEY" ] && (cd "$WORKSPACE" && php artisan key:generate --force) || true
     fi
 
     # Wait for MySQL
@@ -380,12 +368,12 @@ resource "coder_agent" "main" {
     done
 
     # Migrations
-    [ -f "$WORKSPACE/artisan" ] && (cd "$WORKSPACE" && php artisan migrate --env=coder --force 2>&1 | tail -5) || true
+    [ -f "$WORKSPACE/artisan" ] && (cd "$WORKSPACE" && php artisan migrate --force 2>&1 | tail -5) || true
 
-    # Start Laravel dev server (--env=coder loads .env.coder, not .env)
+    # Start Laravel dev server
     if [ -f "$WORKSPACE/artisan" ]; then
       cd "$WORKSPACE"
-      nohup php artisan serve --env=coder --host=0.0.0.0 --port=8000 </dev/null >/tmp/laravel-serve.log 2>&1 &
+      nohup php artisan serve --host=0.0.0.0 --port=8000 </dev/null >/tmp/laravel-serve.log 2>&1 &
       cd -
     fi
 
